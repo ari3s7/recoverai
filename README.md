@@ -97,3 +97,14 @@ Webhook example:
 ## Stack
 
 Next.js (App Router) · TypeScript · Tailwind · file-backed workspace · optional Razorpay · optional OpenAI/Gemini · Web Speech API for Hinglish playback in Chrome.
+
+## What broke at 2 AM
+
+Early on, every play that “worked” in sandbox immediately marked the case **Recovered** and added the full amount to the KPI strip — including payment links that had only been *sent*, not paid. That felt great in a demo click, but it was wrong: judges asked for **measured money recovered**, not “we attempted recovery.”
+
+The fix was to split **execution** from **settlement**:
+
+- **Sandbox (no Razorpay keys):** a deterministic roll simulates conversion so the hackathon batch is repeatable (~₹79k on the seed set). That roll sets `settled: true` only when we pretend money moved.
+- **Razorpay (test keys):** issuing a payment link sets `settled: false`. The case stays **at risk** until `payment.captured` or `payment_link.paid` hits `/api/webhooks/razorpay`. Only then do we increment recovered INR and write the rupee delta to the audit.
+
+Same agent, same policy — but recovered totals now mean “cash back,” not “we sent a link.” That distinction is what made the product credible enough to deploy on Render and show in a 5-minute video without hand-waving.

@@ -1,19 +1,18 @@
-import { inr } from "../format";
+import { inr, CAUSE_LABEL } from "../format";
 import { uid } from "../ids";
+import { recommendRecovery } from "../agent/recommend";
+import { resolvePlayAfterPolicy } from "../agent/validate";
 import type {
   AuditEvent,
   CaseStatus,
-  Diagnosis,
   Outcome,
   Play,
   PolicyConfig,
-  PolicyVerdict,
   RunCase,
 } from "../types";
-import { diagnose } from "./diagnose";
 import { executePlay } from "./execute";
 import { evaluatePolicy } from "./policy";
-import { selectPlay } from "./plays";
+import { buildPlayForId, selectPlay } from "./plays";
 
 function stamp(caseId: string, actor: AuditEvent["actor"], action: string, reason: string, moneyDeltaInr?: number): AuditEvent {
   return {
@@ -33,60 +32,6 @@ function plusDays(from: Date, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-function outcomeFrom(input: {
-  seed: RunCase;
-  play: Play;
-  policy: PolicyVerdict;
-  diagnosis: Diagnosis;
-  executionOk: boolean;
-  now: Date;
-}): Outcome {
-  const { seed, play, policy, executionOk, now } = input;
-  if (policy.action === "stop" || play.id === "stop") {
-    const held = policy.action === "hold" && policy.ruleId === "quiet-hours";
-    if (held) {
-      return { status: "held", recoveredInr: 0, promisedInr: 0, note: policy.reason };
-    }
-    if (policy.action === "hold") {
-      return {
-        status: "promised",
-        recoveredInr: 0,
-        promisedInr: seed.amountInr,
-        promisedDate: seed.signals.promiseToPayDate,
-        note: policy.reason,
-      };
-    }
-    return { status: "stopped", recoveredInr: 0, promisedInr: 0, note: policy.reason };
-  }
-  if (play.id === "human_escalate") {
-    return { status: "escalated", recoveredInr: 0, promisedInr: 0, note: play.reason };
-  }
-  if (play.id === "promise_to_pay") {
-    const date = seed.signals.promiseToPayDate ?? plusDays(now, 7);
-    return {
-      status: "promised",
-      recoveredInr: 0,
-      promisedInr: seed.amountInr,
-      promisedDate: date,
-      note: `Promise-to-pay ${date}. Collections paused.`,
-    };
-  }
-  if (executionOk) {
-    return {
-      status: "recovered",
-      recoveredInr: seed.amountInr,
-      promisedInr: 0,
-      note: `Recovered ${inr(seed.amountInr)} this cycle.`,
-    };
-  }
-  return {
-    status: "at_risk",
-    recoveredInr: 0,
-    promisedInr: 0,
-    note: "Play executed. No conversion this cycle. Sequence stops until a new signal.",
-  };
-}
-
 function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
   const outbound = play.id === "smart_retry" || play.id === "payment_link" || play.id === "hinglish_voice";
   if (!outbound) return c;
@@ -104,38 +49,57 @@ function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
 export async function processCase(current: RunCase, policy: PolicyConfig, now: Date): Promise<RunCase> {
   const ts = now.toISOString();
   const timeline: AuditEvent[] = [];
-  const diagnosis = diagnose(current);
+
   timeline.push(
     stamp(current.id, "agent", "detect", `${current.leakType} · ${inr(current.amountInr)} at risk`),
+  );
+
+  const { diagnosis, agent } = await recommendRecovery(current);
+  timeline.push(
+    stamp(
+      current.id,
+      "ai",
+      "recommend",
+      `${agent.recommendedPlay} · est ${Math.round(agent.recoveryProbability * 100)}% recovery · ${agent.provider}`,
+    ),
   );
   timeline.push(
     stamp(
       current.id,
-      "agent",
+      "ai",
       "diagnose",
-      `${diagnosis.label} (${diagnosis.confidence}% confidence)`,
+      `${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence)`,
     ),
   );
 
   const verdict = evaluatePolicy(current, policy, now);
   timeline.push(stamp(current.id, "policy", verdict.ruleId ?? verdict.action, verdict.reason));
 
-  const play = selectPlay(current, diagnosis, verdict);
+  const ruleFallback = selectPlay(current, diagnosis, verdict);
+  const playId = resolvePlayAfterPolicy(agent, verdict, ruleFallback.id);
+  const play = buildPlayForId(
+    current,
+    agent.rootCause,
+    playId,
+    `AI recommended ${agent.recommendedPlay}. Policy resolved to ${playId}. ${agent.reasoning[0] ?? ""}`,
+  );
+  if (playId !== agent.recommendedPlay && verdict.action === "proceed") {
+    timeline.push(
+      stamp(
+        current.id,
+        "policy",
+        "play-clamp",
+        `Agent suggested ${agent.recommendedPlay}; executing ${playId} after policy merge.`,
+      ),
+    );
+  }
   timeline.push(stamp(current.id, "agent", `play:${play.id}`, play.reason));
 
-  const execution = await executePlay(current, play, diagnosis.rootCause);
-  const result = outcomeFrom({
-    seed: current,
-    play,
-    policy: verdict,
-    diagnosis,
-    executionOk: execution.ok && play.id !== "stop" && play.id !== "human_escalate" && play.id !== "promise_to_pay" && verdict.action === "proceed",
-    now,
-  });
+  const execution = await executePlay(current, play, agent.rootCause);
 
-  // hold / stop / escalate outcomes from policy, not sandbox roll
-  let status: CaseStatus = result.status;
-  let outcome = result;
+  let status: CaseStatus = "at_risk";
+  let outcome: Outcome;
+
   if (verdict.action === "stop") {
     status = "stopped";
     outcome = { status: "stopped", recoveredInr: 0, promisedInr: 0, note: verdict.reason };
@@ -165,8 +129,15 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
       note: "Auto-execute is off. Play is queued for operator approval.",
     };
   } else if (play.id === "promise_to_pay") {
+    const date = current.signals.promiseToPayDate ?? plusDays(now, 7);
     status = "promised";
-    outcome = result;
+    outcome = {
+      status: "promised",
+      recoveredInr: 0,
+      promisedInr: current.amountInr,
+      promisedDate: date,
+      note: `Promise-to-pay ${date}. Collections paused.`,
+    };
   } else if (execution.settled) {
     status = "recovered";
     outcome = {
@@ -195,11 +166,26 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
     ),
   );
 
+  if (outcome.recoveredInr > 0) {
+    timeline.push(
+      stamp(
+        current.id,
+        execution.provider === "razorpay" ? "ingest" : "agent",
+        "outcome.settled",
+        execution.provider === "razorpay"
+          ? `Razorpay verified capture · ${inr(outcome.recoveredInr)}`
+          : `Sandbox simulation settled · ${inr(outcome.recoveredInr)} (not live money)`,
+        outcome.recoveredInr,
+      ),
+    );
+  }
+
   const next: RunCase = bumpContacts(
     {
       ...current,
       status,
       diagnosis,
+      agent,
       policy: verdict,
       play,
       outcome,

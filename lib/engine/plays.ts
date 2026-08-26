@@ -1,5 +1,5 @@
 import { CAUSE_LABEL, inr, PLAY_LABEL } from "../format";
-import type { Diagnosis, Play, PolicyVerdict, RootCause, SeedCase } from "../types";
+import type { Diagnosis, Play, PlayId, PolicyVerdict, RootCause, SeedCase } from "../types";
 
 function firstName(seed: SeedCase): string {
   return seed.customer.name.split(" ")[0] ?? seed.customer.name;
@@ -41,6 +41,53 @@ export function hinglishScript(seed: SeedCase, cause: RootCause): string {
 function linkCopy(seed: SeedCase, cause: RootCause): string {
   const name = firstName(seed);
   return `Hi ${name}, Nivaara here. ${CAUSE_LABEL[cause]} on ${inr(seed.amountInr)}. Pay on this secure link — we will not retry the old instrument.`;
+}
+
+export function buildPlayForId(seed: SeedCase, cause: RootCause, playId: PlayId, reason?: string): Play {
+  if (playId === "stop") {
+    return { id: "stop", label: PLAY_LABEL.stop, channel: "none", reason: reason ?? "Stop" };
+  }
+  if (playId === "human_escalate") {
+    return {
+      id: "human_escalate",
+      label: PLAY_LABEL.human_escalate,
+      channel: "operator",
+      reason: reason ?? "Human escalation required.",
+    };
+  }
+  if (playId === "smart_retry") {
+    return {
+      id: "smart_retry",
+      label: PLAY_LABEL.smart_retry,
+      channel: "payments",
+      reason: reason ?? "Retryable failure. Schedule one delayed debit.",
+    };
+  }
+  if (playId === "promise_to_pay") {
+    return {
+      id: "promise_to_pay",
+      label: PLAY_LABEL.promise_to_pay,
+      channel: "whatsapp",
+      reason: reason ?? "Capture a dated promise instead of another reminder.",
+      script: hinglishScript(seed, cause),
+    };
+  }
+  if (playId === "hinglish_voice") {
+    return {
+      id: "hinglish_voice",
+      label: PLAY_LABEL.hinglish_voice,
+      channel: "voice",
+      reason: reason ?? "Conversation needed for objection handling.",
+      script: hinglishScript(seed, cause),
+    };
+  }
+  return {
+    id: "payment_link",
+    label: PLAY_LABEL.payment_link,
+    channel: seed.customer.channelPref === "email" ? "email" : "whatsapp",
+    reason: reason ?? "Send a single-use payment link.",
+    script: linkCopy(seed, cause),
+  };
 }
 
 export function selectPlay(seed: SeedCase, diagnosis: Diagnosis, policy: PolicyVerdict): Play {

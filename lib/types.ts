@@ -76,6 +76,10 @@ export type CaseSignals = {
   promiseToPayDate?: string;
   razorpayPaymentId?: string;
   razorpayPaymentLinkId?: string;
+  /** 0–1 share of successful historical payments (synthetic / enriched cases). */
+  paymentSuccessRate?: number;
+  lifetimePayments?: number;
+  priorRecoveries?: number;
   flags: Flag[];
 };
 
@@ -122,6 +126,62 @@ export type Outcome = {
   note: string;
 };
 
+export type AgentRecommendation = {
+  rootCause: RootCause;
+  recoveryProbability: number;
+  recommendedPlay: PlayId;
+  confidence: number;
+  reasoning: string[];
+  provider: "openai" | "gemini" | "heuristic";
+  /** Rule-only play for A/B comparison on the same case. */
+  baselinePlay: PlayId;
+};
+
+export type CaseContext = {
+  caseId: string;
+  leakType: LeakType;
+  amountInr: number;
+  segment: "d2c" | "b2b";
+  customer: Customer;
+  signals: CaseSignals;
+  paymentContext?: string;
+  checkoutContext?: string;
+  subscriptionContext?: string;
+  invoiceContext?: string;
+  promiseContext?: string;
+  customerHistory: {
+    paymentSuccessRate: number;
+    lifetimePayments: number;
+    priorRecoveries: number;
+    contactsLast7Days: number;
+    retryCount: number;
+  };
+};
+
+export type EvaluationStrategyMetrics = {
+  strategy: "baseline" | "recoverai_agent";
+  exposureInr: number;
+  recoveredInr: number;
+  recoveryRate: number;
+  actionCount: number;
+  recoveredCount: number;
+  escalatedCount: number;
+  stoppedCount: number;
+  promisedCount: number;
+  actionsPerRecovery: number;
+  byLeak: Record<LeakType, { exposureInr: number; recoveredInr: number; count: number }>;
+};
+
+export type EvaluationReport = {
+  caseCount: number;
+  baseline: EvaluationStrategyMetrics;
+  agent: EvaluationStrategyMetrics;
+  incrementalRecoveredInr: number;
+  recoveryLiftPct: number;
+  dataset: "synthetic" | "seed";
+  ranAt: string;
+};
+
 export type ExecutionResult = {
   ok: boolean;
   /** True only when money actually moved (sandbox conversion or Razorpay capture). */
@@ -132,7 +192,7 @@ export type ExecutionResult = {
   paymentLinkUrl?: string;
 };
 
-export type AuditActor = "agent" | "policy" | "human" | "ingest";
+export type AuditActor = "agent" | "ai" | "policy" | "human" | "ingest";
 
 export type AuditEvent = {
   id: string;
@@ -147,6 +207,7 @@ export type AuditEvent = {
 export type RunCase = SeedCase & {
   status: CaseStatus;
   diagnosis?: Diagnosis;
+  agent?: AgentRecommendation;
   policy?: PolicyVerdict;
   play?: Play;
   outcome?: Outcome;
