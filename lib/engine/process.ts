@@ -156,6 +156,14 @@ export function processCase(current: RunCase, policy: PolicyConfig, now: Date): 
   } else if (verdict.action === "escalate") {
     status = "escalated";
     outcome = { status: "escalated", recoveredInr: 0, promisedInr: 0, note: verdict.reason };
+  } else if (!policy.autoExecute && play.id !== "stop") {
+    status = "escalated";
+    outcome = {
+      status: "escalated",
+      recoveredInr: 0,
+      promisedInr: 0,
+      note: "Auto-execute is off. Play is queued for operator approval.",
+    };
   } else if (play.id === "promise_to_pay") {
     status = "promised";
     outcome = result;

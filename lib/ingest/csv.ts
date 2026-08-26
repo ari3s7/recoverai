@@ -1,6 +1,6 @@
-import { nextCaseId, uid } from "./ids";
-import type { Flag, Language, LeakType, RunCase } from "./types";
-import { FLAGS, LEAK_TYPES } from "./types";
+import { nextCaseId, uid } from "../ids";
+import type { Flag, Language, LeakType, RunCase } from "../types";
+import { FLAGS, LEAK_TYPES } from "../types";
 
 function splitCsvLine(line: string): string[] {
   const out: string[] = [];
