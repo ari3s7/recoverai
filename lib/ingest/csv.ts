@@ -45,7 +45,7 @@ export function parseCasesCsv(text: string, existingIds: string[]): { cases: Run
   const idx = (name: string) => header.indexOf(name);
   const errors: string[] = [];
   const cases: RunCase[] = [];
-  let ids = [...existingIds];
+  const ids = [...existingIds];
 
   for (let r = 1; r < lines.length; r++) {
     const cols = splitCsvLine(lines[r]);

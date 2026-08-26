@@ -1,3 +1,4 @@
+import { sandboxUnit } from "../engine/hash";
 import type {
   ChannelPref,
   Flag,
@@ -131,6 +132,7 @@ export function seedCaseFromDraft(draft: Draft, index: number): SeedCase {
     occurredAt: occurredAt(index),
     merchantSegment: draft.segment ?? "d2c",
     groundTruthPropensity,
+    latentOutcomeSeed: sandboxUnit(`NV-${1041 + index}`, "paired-latent"),
     signals: {
       declineCode: draft.decline,
       dropReason: draft.drop,

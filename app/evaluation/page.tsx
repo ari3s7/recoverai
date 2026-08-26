@@ -32,9 +32,10 @@ export default function EvaluationPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-gold">Paired evaluation</h1>
         <p className="text-sm text-muted mt-1">
-          Baseline vs <strong className="text-foreground">RecoverAI Recovery Policy</strong> on the same synthetic
-          cases and the same latent customer outcome. This benchmark does <strong>not</strong> call an LLM.
-          Live model decisions are a separate per-case action on the desk.
+          Paired deterministic synthetic evaluation. Baseline vs{" "}
+          <strong className="text-foreground">RecoverAI Recovery Policy</strong> on the same cases and the same
+          latent customer outcome. Bulk benchmark: LLM calls: 0. Ground truth is synthetic and hidden from the
+          agent. Live OpenAI/Gemini decisions are a separate per-case action on the desk.
         </p>
       </div>
 
@@ -189,8 +190,9 @@ export default function EvaluationPage() {
           </section>
 
           <p className="text-xs text-muted">
-            Synthetic ground truth is hidden from the decision policy. Razorpay captures are verified separately via
-            webhook and are not this simulator. Curated demo cases live on Command; this page is the experiment.
+            Synthetic evaluation is not real merchant performance. Ground truth is hidden from the agent. Razorpay
+            captures are verified separately via webhook and are not this simulator. Curated demo cases live on
+            Command; this page is the experiment.
           </p>
         </>
       ) : loading ? (

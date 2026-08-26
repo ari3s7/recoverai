@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { CaseDrawer } from "@/components/case-drawer";
 import { CaseTable } from "@/components/case-table";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
@@ -11,13 +11,15 @@ export default function QueuePage() {
   const [view, setView] = useState<WorkspaceView | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
-    setView(await loadWorkspace());
-  }, []);
-
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let cancelled = false;
+    loadWorkspace().then((next) => {
+      if (!cancelled) setView(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!view) return <div className="p-8 text-sm text-muted">Loading queue…</div>;
 

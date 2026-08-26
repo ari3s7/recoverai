@@ -1,8 +1,16 @@
 # RecoverAI
 
-Operator desk for **AI Revenue Recovery** (Track 03). It takes a batch of leaked revenue — failed payments, abandoned checkouts, lapsed subscriptions, overdue invoices — diagnoses each case, applies stopping rules, executes a bounded play, and reports **rupees recovered**.
+AI-powered revenue recovery agent for Indian D2C and B2B merchants (Razorpay AI Buildathon). Merchant: **Nivaara**.
 
-No Postgres. No Twilio. State lives in `data/store.json`. Payments default to a sandbox adapter; with Razorpay test keys the desk issues **real payment links** and settles on capture webhooks.
+RecoverAI detects revenue at risk, builds decision-time context, recommends a bounded recovery play, applies merchant guardrails, executes **only** authorized actions, observes the real payment outcome, and measures recovered rupees.
+
+```
+DETECT → CONTEXT → AI RECOMMEND → POLICY GATE → BOUNDED ACTION → OUTCOME → AUDIT → MEASURE
+```
+
+Policy is authoritative. The AI is advisory. Razorpay (or the sandbox settlement adapter) is the source of truth for recovered money. **Issuing a Payment Link is not recovery.**
+
+No Postgres. No Redis. No LangChain. State lives in `data/store.json`.
 
 ## Run
 
@@ -13,40 +21,79 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-Optional LLM polish (diagnosis copy and Hinglish scripts). The batch never waits on it:
-
 ```bash
 cp .env.example .env.local
-# optional: OPENAI_API_KEY or GEMINI_API_KEY
-# optional: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET
+# optional live AI: OPENAI_API_KEY or GEMINI_API_KEY
+# optional Razorpay test keys: RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET
 ```
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
+## How decisions work
+
+1. **Context builder** — observed payment history, leak type, retries, contacts, mandate/invoice/checkout fields. Hidden ground truth is never included.
+2. **RecoverAI agent** — diagnoses root cause, scores plays, recommends one play with a predicted probability, confidence, and concise evidence.
+   - **Desk batch / Evaluate page:** deterministic **RecoverAI Recovery Policy**. **LLM calls: 0.**
+   - **Live AI:** per-case OpenAI or Gemini when a key is set. Invalid JSON falls back to the deterministic policy.
+3. **Policy gate** — DNC, complaint, legal, fraud/chargeback, contact cap, quiet hours, active promise-to-pay, high-AOV / B2B DPD, retry and mandate caps, recovery window, `autoExecute`.
+4. **Authorization** — ALLOW / HOLD / ESCALATE / STOP / queued. `executePlay()` runs **only** when authorized.
+5. **Outcome** — sandbox conversion (demo) or Razorpay capture webhook (test mode).
+6. **Audit** — `AI_DECISION`, `POLICY_DECISION`, `ACTION_EXECUTED` / `ACTION_BLOCKED` / `ACTION_HELD` / `ACTION_ESCALATED` / `ACTION_QUEUED`, `PAYMENT_OUTCOME`, `RECOVERY_RESULT`.
+
+The model does **not** call Razorpay, write the store, or bypass policy. Controlled helpers in `lib/agent/tools.ts` are backend functions (context, scores, guardrails). Structured context + controlled actions — not autonomous tool calling.
+
+## Evaluation (honest)
+
+`/evaluation` is a **paired deterministic synthetic counterfactual**:
+
+- Same synthetic customer/case
+- Same hidden `latentOutcomeSeed`
+- Baseline strategy vs RecoverAI Recovery Policy
+- **LLM calls: 0**
+
+Ground truth is synthetic and **hidden from the agent**. This is not real merchant performance.
+
+Live LLM is a separate per-case action on the desk (`Live AI agent`).
 
 ## Razorpay
 
-Without keys the desk stays in sandbox (hackathon demo still works).
+Without keys the desk stays in sandbox so the demo still runs.
 
 With **test keys** (`rzp_test_…`):
 
 1. Put keys in `.env.local` and restart.
-2. Command center → **Sync failed payments** (`POST /api/razorpay/sync`).
-3. Run a recovery batch. Payment-link / retry / voice plays call Razorpay Payment Links. The case stays at-risk until paid.
-4. Dashboard → Webhooks → `http://<host>/api/webhooks/razorpay`  
-   Events: `payment.failed`, `payment.captured`, `payment_link.paid`.  
-   Secret → `RAZORPAY_WEBHOOK_SECRET`.
+2. Command → **Sync failed payments**.
+3. Run recovery. Authorized payment-link / retry / voice plays issue a **new** INR Payment Link. The case stays at-risk.
+4. Customer pays in Razorpay test checkout.
+5. Webhook `payment.captured` / `payment_link.paid` → verified recovery. Duplicate webhooks are no-ops.
 
-Razorpay will not re-debit a failed card. RecoverAI issues a **new** INR payment link instead. Capture marks the case recovered and adds the rupee delta to the audit.
+Razorpay will not re-debit a failed card. RecoverAI issues a new link instead. A failed link create does **not** mark recovered.
 
-## 90-second demo
+## Seven workflows
 
-1. **Command** — exposure across 48 Nivaara cases.
-2. Click **Run recovery batch**. Watch detect → diagnose → policy → act. Recovered INR counts up. Audit streams on the right.
-3. Open a **Stopped** case (`NV-1048` Kabir Singh — complaint, or `NV-1054` Farhan Ali — DNC). Policy fired. No outbound.
-4. Open a **Hinglish voice** recovery (`NV-1060` Nikhil Bansal, price shock). Click **Speak**.
-5. Open **Queue** for high-AOV / 60+ DPD B2B that must not be auto-called (`NV-1079` Neel Logistics).
-6. Open **Promises** for dated holds (`NV-1083` Saffron Traders).
-7. Open **Audit** — recovered vs stopped vs escalated. Export JSON/CSV.
+1. Payment degradation → root cause → retry / link / voice / PTP / escalate / stop
+2. Checkout drop-off recovery
+3. Failed-subscription recovery
+4. B2B receivables chaser (high-AOV / DPD escalation)
+5. AI-assisted bounded mandate recovery (retry cap, cooldown, window, then link)
+6. Hinglish intent (“link bhej do”) → controlled payment link
+7. Promise-to-pay tracker (active hold; breached date follows remaining policy)
 
-Say on camera: *it does not just flag leakage. It recovers a measured number across a batch, under stopping rules, with an audit trail.*
+## Demo script
+
+1. **Command** — 48 Nivaara cases. Run recovery policy (heuristic + policy + execute).
+2. **Evaluate** — paired experiment, 0 LLM calls, lift vs baseline.
+3. Open a recovered payment-failure case: AI rec vs policy vs outcome vs recovered ₹.
+4. Open a blocked case (Neel Logistics high-AOV B2B, or DNC Farhan Ali): AI may recommend a play; policy STOP/ESCALATE; **action not executed**.
+5. Mandate cases (Bhavya Shah, Tejas Kulkarni): bounded sequencer.
+6. Hinglish “link bhej do”.
+7. Promises (Saffron Traders).
+8. Live AI on one case if keys are set.
+9. Razorpay: link issued ≠ recovered until capture.
 
 ## Product surface
 
@@ -57,54 +104,33 @@ Say on camera: *it does not just flag leakage. It recovers a measured number acr
 | `/promises` | Promise-to-pay tracker |
 | `/audit` | Filterable audit trail + export |
 | `/policy` | Editable stopping rules |
+| `/evaluation` | Paired synthetic benchmark |
 
-## Pipeline
+## Guardrails
 
-Detect → Diagnose → Policy gate → Select play → Execute (sandbox or Razorpay) → Outcome → Audit.
-
-**Stops:** DNC, complaint, legal, fraud/chargeback, contact cap (default 3 / 7 days).
+**Stops:** DNC, complaint, legal, fraud/chargeback, contact cap, expired recovery window.
 
 **Holds:** quiet hours IST (21:00–09:00), active promise-to-pay.
 
-**Escalates:** amount ≥ ₹25,000 or B2B DPD ≥ 60. No auto voice.
+**Escalates:** amount ≥ ₹25,000 or B2B DPD ≥ 60. No auto voice. No Payment Link.
+
+**`autoExecute: false`:** recommendation is recorded; outbound is queued for an operator.
 
 **Plays:** smart retry, payment link, Hinglish voice, promise-to-pay, human escalate, stop.
 
 ## APIs
 
-- `GET /api/workspace` — full desk snapshot
-- `POST /api/batch/run` — SSE case-by-case run
-- `POST /api/cases/:id/actions` — `run` \| `stop` \| `escalate` \| `mark_recovered` \| `capture_promise` \| `release_hold`
-- `PUT /api/policy` — stopping rules
-- `POST /api/ingest/webhook` — live leak event
-- `POST /api/ingest/csv` — bulk import (`public/sample-cases.csv`)
-- `POST /api/razorpay/sync` — pull failed Razorpay payments
-- `POST /api/webhooks/razorpay` — signed `payment.failed` / `payment.captured` / `payment_link.paid`
-- `POST /api/workspace/reset` — restore the 48-case seed
+- `GET /api/workspace`
+- `POST /api/batch/run` — SSE batch (policy path, no LLM)
+- `POST /api/cases/:id/actions` — `run` \| `live_ai` \| `stop` \| `escalate` \| `mark_recovered` \| `capture_promise` \| `release_hold`
+- `POST /api/evaluation` — paired synthetic experiment
+- `PUT /api/policy`
+- `POST /api/ingest/webhook` / `POST /api/ingest/csv`
+- `POST /api/razorpay/sync`
+- `POST /api/webhooks/razorpay`
+- `POST /api/workspace/reset`
 - `GET /api/health`
-
-Webhook example:
-
-```json
-{
-  "type": "payment.failed",
-  "amountInr": 2199,
-  "customer": { "name": "Ira Sen", "city": "Pune" },
-  "declineCode": "INSUFFICIENT_FUNDS"
-}
-```
 
 ## Stack
 
-Next.js (App Router) · TypeScript · Tailwind · file-backed workspace · optional Razorpay · optional OpenAI/Gemini · Web Speech API for Hinglish playback in Chrome.
-
-## What broke at 2 AM
-
-Early on, every play that “worked” in sandbox immediately marked the case **Recovered** and added the full amount to the KPI strip — including payment links that had only been *sent*, not paid. That felt great in a demo click, but it was wrong: judges asked for **measured money recovered**, not “we attempted recovery.”
-
-The fix was to split **execution** from **settlement**:
-
-- **Sandbox (no Razorpay keys):** a deterministic roll simulates conversion so the hackathon batch is repeatable (~₹79k on the seed set). That roll sets `settled: true` only when we pretend money moved.
-- **Razorpay (test keys):** issuing a payment link sets `settled: false`. The case stays **at risk** until `payment.captured` or `payment_link.paid` hits `/api/webhooks/razorpay`. Only then do we increment recovered INR and write the rupee delta to the audit.
-
-Same agent, same policy — but recovered totals now mean “cash back,” not “we sent a link.” That distinction is what made the product credible enough to deploy on Render and show in a 5-minute video without hand-waving.
+Next.js (App Router) · TypeScript · Tailwind · file-backed workspace · optional Razorpay Test Mode · optional OpenAI/Gemini · Web Speech API for Hinglish playback.

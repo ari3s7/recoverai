@@ -34,17 +34,25 @@ export function CaseDrawer({
   onClose: () => void;
   onAction: (id: string, action: CaseActionRequest) => Promise<void>;
 }) {
-  const [script, setScript] = useState(cse?.play?.script ?? "");
-  const [narrative, setNarrative] = useState(cse?.diagnosis?.narrative ?? "");
+  const [script, setScript] = useState("");
+  const [narrative, setNarrative] = useState("");
   const [promiseDate, setPromiseDate] = useState("");
   const [polishing, setPolishing] = useState(false);
   const [speaking, setSpeaking] = useState(false);
+  const [syncedKey, setSyncedKey] = useState("");
 
-  useEffect(() => {
-    setScript(cse?.play?.script ?? "");
-    setNarrative(cse?.diagnosis?.narrative ?? "");
-    setPromiseDate(cse?.outcome?.promisedDate ?? cse?.signals.promiseToPayDate ?? "");
-  }, [cse]);
+  const syncKey = cse ? `${cse.id}:${cse.updatedAt}` : "";
+  if (cse && syncKey !== syncedKey) {
+    setSyncedKey(syncKey);
+    setScript(cse.play?.script ?? "");
+    setNarrative(cse.diagnosis?.narrative ?? "");
+    setPromiseDate(cse.outcome?.promisedDate ?? cse.signals.promiseToPayDate ?? "");
+  } else if (!cse && syncedKey) {
+    setSyncedKey("");
+    setScript("");
+    setNarrative("");
+    setPromiseDate("");
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -103,20 +111,40 @@ export function CaseDrawer({
           </div>
 
           <section className="rounded-lg border border-line bg-background/40 p-3">
-            <Label>Case</Label>
+            <Label>Customer</Label>
             <p className="font-medium">{LEAK_LABEL[cse.leakType]}</p>
             <p className="text-xs text-muted mt-1">
               {cse.merchantSegment.toUpperCase()} · occurred {ist(cse.occurredAt)}
             </p>
-            <p className="text-xs text-muted mt-2">
-              History: {cse.signals.successfulPayments ?? "—"}/{cse.signals.lifetimePayments ?? "—"} payments
-              succeeded
+          </section>
+
+          <section className="rounded-lg border border-line p-3 space-y-1">
+            <Label>Customer context</Label>
+            <p className="text-xs">
+              {cse.signals.successfulPayments ?? "—"}/{cse.signals.lifetimePayments ?? "—"} payments succeeded
+              {typeof cse.signals.avgPaymentInr === "number" ? ` · avg ${inr(cse.signals.avgPaymentInr)}` : ""}
               {typeof cse.signals.avgPaymentDelayDays === "number"
                 ? ` · avg delay ${cse.signals.avgPaymentDelayDays}d`
                 : ""}
+            </p>
+            <p className="text-xs text-muted">
+              Prior recoveries {cse.signals.priorRecoveries ?? 0}
+              {cse.signals.subscriptionAgeMonths
+                ? ` · sub age ${cse.signals.subscriptionAgeMonths} mo`
+                : ""}
+              {cse.signals.previousAbandonments
+                ? ` · ${cse.signals.previousAbandonments} prior abandonments`
+                : ""}
+              {cse.signals.previousPromises ? ` · ${cse.signals.previousPromises} prior promises` : ""}
+              {typeof cse.signals.promiseFulfillmentRate === "number"
+                ? ` · PTP fulfill ${Math.round(cse.signals.promiseFulfillmentRate * 100)}%`
+                : ""}
+            </p>
+            <p className="text-xs text-muted">
+              Contacts last 7d: {cse.signals.contactsLast7Days}
               {cse.signals.retryCount ? ` · ${cse.signals.retryCount} retries` : ""}
               {cse.signals.mandateRetryCount ? ` · mandate retry ${cse.signals.mandateRetryCount}` : ""}
-              {cse.signals.priorRecoveries ? ` · ${cse.signals.priorRecoveries} prior recoveries` : ""}
+              {cse.signals.lastContactAt ? ` · last ${ist(cse.signals.lastContactAt)}` : ""}
             </p>
           </section>
 
@@ -124,9 +152,13 @@ export function CaseDrawer({
             <section className="rounded-lg border border-line p-3 space-y-1">
               <Label>Mandate sequencer</Label>
               <p className="font-medium">
-                Attempt {mandate.attempt}/{mandate.maxAttempts} · next {PLAY_LABEL[mandate.nextEligiblePlay]}
+                Attempt {mandate.attempt}/{mandate.maxAttempts} · {mandate.currentState} · next{" "}
+                {PLAY_LABEL[mandate.nextEligiblePlay]}
               </p>
               <p className="text-xs text-muted">{mandate.reason}</p>
+              <p className="text-[10px] text-muted">
+                {mandate.lastAction} · outcome {mandate.outcome}
+              </p>
               {mandate.windowExpired ? <p className="text-xs text-danger">Window expired — stop.</p> : null}
               {mandate.cooldownActive ? <p className="text-xs text-muted">Cooldown active.</p> : null}
             </section>
@@ -136,7 +168,7 @@ export function CaseDrawer({
             <section className="rounded-lg border border-gold/30 bg-gold/5 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label>
-                  {cse.agent.provider === "heuristic" ? "RecoverAI recovery policy" : "Live AI agent decision"}
+                  {cse.agent.provider === "heuristic" ? "AI decision (RecoverAI policy)" : "AI decision (live LLM)"}
                 </Label>
                 <span className="text-[10px] uppercase tracking-wide text-muted">{cse.agent.provider}</span>
               </div>
@@ -144,24 +176,26 @@ export function CaseDrawer({
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
                   <span className="text-muted">Predicted recovery</span>
-                  <p className="tabular font-medium">{Math.round(cse.agent.recoveryProbability * 100)}%</p>
+                  <p className="tabular font-medium">
+                    {Math.round((cse.agent.aiPredictedRecoveryProbability ?? cse.agent.recoveryProbability) * 100)}%
+                  </p>
                 </div>
                 <div>
                   <span className="text-muted">Confidence</span>
                   <p className="tabular font-medium">{cse.agent.confidence}%</p>
                 </div>
               </div>
-              <p className="text-xs text-muted">
-                Root cause: {CAUSE_LABEL[cse.agent.rootCause]}
-              </p>
+              <p className="text-xs text-muted">Root cause: {CAUSE_LABEL[cse.agent.rootCause]}</p>
               {cse.agent.reasoning.length ? (
                 <ul className="space-y-1 text-xs text-muted">
                   {cse.agent.reasoning.map((e) => (
-                    <li key={e}>· {e}</li>
+                    <li key={e}>✓ {e}</li>
                   ))}
                 </ul>
               ) : null}
-              <p className="text-[10px] text-muted">Predicted recovery — not money received</p>
+              <p className="text-[10px] text-muted">
+                AI recommendation ≠ action executed ≠ recovered revenue
+              </p>
               {cse.agent.comparedPlays?.length ? (
                 <div className="text-[11px] text-muted space-y-0.5">
                   {cse.agent.comparedPlays.map((row) => (
@@ -191,24 +225,37 @@ export function CaseDrawer({
           </section>
 
           <section>
-            <Label>Policy gate</Label>
-            <p className={cse.policy?.allowed === false ? "text-danger" : "text-ok"}>
-              {cse.policy?.action === "proceed" ? "Approved" : cse.policy?.action ?? "—"}
+            <Label>Policy</Label>
+            <p className={cse.policy?.allowed === false || cse.policy?.action !== "proceed" ? "text-danger" : "text-ok"}>
+              {cse.policy?.action === "proceed"
+                ? "APPROVED"
+                : (cse.policy?.action ?? "—").toUpperCase()}
               {cse.policy?.ruleId ? ` · ${cse.policy.ruleId}` : ""}
             </p>
             <p className="text-muted mt-1">{cse.policy?.reason ?? "Stopping rules have not been evaluated yet."}</p>
             {cse.agent && cse.play && cse.agent.recommendedPlay !== cse.play.id ? (
               <p className="text-xs text-danger mt-2">
-                Recommended {PLAY_LABEL[cse.agent.recommendedPlay]} was not executed. Policy{" "}
-                {cse.policy?.action}: {PLAY_LABEL[cse.play.id]}.
+                AI recommended {PLAY_LABEL[cse.agent.recommendedPlay]}. Policy {cse.policy?.action}:{" "}
+                {PLAY_LABEL[cse.play.id]}.
               </p>
             ) : null}
           </section>
 
           <section>
-            <Label>Executed action</Label>
-            <p className="font-medium">{cse.play ? PLAY_LABEL[cse.play.id] : "—"}</p>
-            <p className="text-muted mt-1">{cse.play?.reason}</p>
+            <Label>Execution</Label>
+            <p className="font-medium">
+              {cse.executionStatus === "executed"
+                ? "EXECUTED"
+                : cse.executionStatus
+                  ? `NOT EXECUTED · ${cse.executionStatus}`
+                  : cse.play
+                    ? PLAY_LABEL[cse.play.id]
+                    : "—"}
+            </p>
+            <p className="text-muted mt-1">{cse.execution?.message ?? cse.play?.reason}</p>
+            {cse.play ? (
+              <p className="text-xs text-muted mt-1">Authorized play: {PLAY_LABEL[cse.play.id]}</p>
+            ) : null}
             {cse.execution ? (
               <p className="mt-2 font-mono text-[11px] text-gold-dim">
                 {cse.execution.provider} · {cse.execution.referenceId}

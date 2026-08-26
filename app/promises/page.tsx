@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { CaseDrawer } from "@/components/case-drawer";
 import { CaseTable } from "@/components/case-table";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
@@ -11,13 +11,15 @@ export default function PromisesPage() {
   const [view, setView] = useState<WorkspaceView | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
-    setView(await loadWorkspace());
-  }, []);
-
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let cancelled = false;
+    loadWorkspace().then((next) => {
+      if (!cancelled) setView(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (!view) return <div className="p-8 text-sm text-muted">Loading promises…</div>;
 
@@ -39,7 +41,8 @@ export default function PromisesPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Promise-to-pay</h1>
         <p className="text-sm text-muted mt-1">
-          Dated commitments. Policy holds retries until the date. Break the promise to release, or mark recovered when cash lands.
+          Dated commitments. Active promises HOLD retries until the date. A breached date releases the hold and
+          recovery follows remaining policy. Mark recovered when cash lands.
         </p>
       </div>
       <p className="text-sm">

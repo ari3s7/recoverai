@@ -152,10 +152,16 @@ export type PlayEstimate = {
   estimatedRecovery: number;
 };
 
+export type ExecutionStatus = "executed" | "blocked" | "held" | "queued" | "escalated";
+
 export type AgentRecommendation = {
   rootCause: RootCause;
+  /** Alias of aiPredictedRecoveryProbability (0–1). Not ground truth. */
   recoveryProbability: number;
+  /** Strategy/AI predicted conversion (0–1). Never equal to hidden ground truth. */
+  aiPredictedRecoveryProbability: number;
   recommendedPlay: PlayId;
+  /** Display confidence 0–100. LLM JSON may send 0–1; we normalize. */
   confidence: number;
   reasoning: string[];
   comparedPlays: PlayEstimate[];
@@ -192,6 +198,7 @@ export type CaseContext = {
     contactsLast7Days: number;
     retryCount: number;
     mandateRetryCount: number;
+    lastContactAt?: string;
   };
 };
 
@@ -267,6 +274,7 @@ export type RunCase = SeedCase & {
   play?: Play;
   outcome?: Outcome;
   execution?: ExecutionResult;
+  executionStatus?: ExecutionStatus;
   operatorNote?: string;
   lastBatchId?: string;
   paymentLinkUrl?: string;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
 import { inr } from "@/lib/format";
 import type { PolicyConfig } from "@/lib/types";
@@ -10,15 +10,18 @@ export default function PolicyPage() {
   const [policy, setPolicy] = useState<PolicyConfig | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
-    const next = await loadWorkspace();
-    setView(next);
-    setPolicy(next.policy);
-  }, []);
-
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let cancelled = false;
+    loadWorkspace().then((next) => {
+      if (!cancelled) {
+        setView(next);
+        setPolicy(next.policy);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function save() {
     if (!policy) return;

@@ -47,8 +47,18 @@ export function CommandCenter() {
   }, []);
 
   useEffect(() => {
-    reload().catch((err: unknown) => setError(err instanceof Error ? err.message : "Load failed"));
-  }, [reload]);
+    let cancelled = false;
+    loadWorkspace()
+      .then((next) => {
+        if (!cancelled) setView(next);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Load failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selected = view?.cases.find((c) => c.id === selectedId) ?? null;
 
@@ -69,7 +79,7 @@ export function CommandCenter() {
     if (running) return;
     setRunning(true);
     setError(null);
-        setLiveLine("Detect → AI decide → policy → act");
+        setLiveLine("Detect → context → AI recommend → policy → authorized action");
     try {
       const res = await fetch("/api/batch/run", { method: "POST" });
       if (!res.ok) throw new Error("Batch failed to start");

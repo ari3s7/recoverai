@@ -104,6 +104,7 @@ function heuristicRecommend(
   return {
     rootCause: dx.rootCause,
     recoveryProbability: score,
+    aiPredictedRecoveryProbability: score,
     recommendedPlay: chosen,
     confidence,
     reasoning: reasoning.slice(0, 5),
@@ -158,11 +159,11 @@ async function llmRecommend(
       "stop",
     ],
     instruction:
-      "Compare the scored plays and pick ONE. You may disagree with the gateway hint if evidence is stronger. Return JSON only: rootCause, recoveryProbability (0-1), recommendedPlay, confidence (0-100), reasoning (max 5 concise evidence bullets). Do not include chain-of-thought. Policy will validate — you only recommend.",
+      "You MUST choose independently from the observable context. playScores are decision-time estimates, not an answer key. Return JSON only: {rootCause, recoveryProbability (0-1), recommendedPlay, confidence (0-1), reasoning (max 5 concise observable evidence bullets)}. No chain-of-thought. Policy will validate — you only recommend. Never claim money was recovered.",
   };
 
   const system =
-    "You are RecoverAI, a revenue recovery agent for Indian D2C and B2B merchants. Choose the best bounded recovery play by comparing options. Never claim money was recovered.";
+    "You are RecoverAI, a revenue recovery agent for Indian D2C and B2B merchants. Diagnose root cause and recommend ONE bounded play. Do not follow a predetermined play. Never claim money was recovered. Never mention hidden ground truth.";
 
   if (process.env.OPENAI_API_KEY) {
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -185,7 +186,7 @@ async function llmRecommend(
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     const json = extractJson(data.choices?.[0]?.message?.content ?? "");
     if (!json) return null;
-    return parseLlmJson(json, seed, dx, ranked, "openai");
+    return parseLlmRecommendation(json, seed, dx, ranked, "openai");
   }
 
   if (process.env.GEMINI_API_KEY) {
@@ -206,13 +207,40 @@ async function llmRecommend(
     };
     const json = extractJson(data.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
     if (!json) return null;
-    return parseLlmJson(json, seed, dx, ranked, "gemini");
+    return parseLlmRecommendation(json, seed, dx, ranked, "gemini");
   }
 
   return null;
 }
 
-function parseLlmJson(
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** recoveryProbability must be in [0, 1]. Integer percents 2–100 are accepted. */
+export function parseProbability01(value: unknown): number | null {
+  const n = finiteNumber(value);
+  if (n === null) return null;
+  if (n >= 0 && n <= 1) return n;
+  if (n > 1 && n <= 100 && Number.isInteger(n)) return n / 100;
+  return null;
+}
+
+/** Confidence stored as 0–100. LLM may send 0–1 or 0–100. 0 stays 0. */
+export function parseConfidencePercent(value: unknown): number | null {
+  const n = finiteNumber(value);
+  if (n === null) return null;
+  if (n < 0 || n > 100) return null;
+  if (n <= 1) return Math.round(n * 100);
+  return Math.round(n);
+}
+
+export function parseLlmRecommendation(
   json: Record<string, unknown>,
   seed: SeedCase,
   dx: Diagnosis,
@@ -222,15 +250,21 @@ function parseLlmJson(
   const rc = String(json.rootCause ?? "");
   const play = String(json.recommendedPlay ?? "");
   if (!ROOT_CAUSES.includes(rc as RootCause) || !isValidPlayId(play)) return null;
+  const recoveryProbability = parseProbability01(json.recoveryProbability);
+  const confidence = parseConfidencePercent(json.confidence);
+  if (recoveryProbability === null || confidence === null) return null;
   const reasoning = Array.isArray(json.reasoning)
     ? json.reasoning.map(String).slice(0, 5)
-    : [String(json.reasoning ?? "LLM recommendation")];
-  const scored = ranked.find((r) => r.play === play)?.score;
+    : typeof json.reasoning === "string"
+      ? [json.reasoning]
+      : null;
+  if (!reasoning) return null;
   return {
     rootCause: rc as RootCause,
-    recoveryProbability: Math.min(1, Math.max(0, Number(json.recoveryProbability) || scored || 0.3)),
+    recoveryProbability,
+    aiPredictedRecoveryProbability: recoveryProbability,
     recommendedPlay: play,
-    confidence: Math.min(100, Math.max(0, Math.round(Number(json.confidence) || 75))),
+    confidence,
     reasoning,
     comparedPlays: compared(ranked),
     provider,

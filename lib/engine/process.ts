@@ -5,13 +5,16 @@ import { resolvePlayAfterPolicy } from "../agent/validate";
 import type {
   AuditEvent,
   CaseStatus,
+  ExecutionResult,
   Outcome,
   Play,
   PolicyConfig,
   RunCase,
 } from "../types";
+import { authorizeExecution } from "./authorize";
 import { executePlay } from "./execute";
 import { evaluatePolicy } from "./policy";
+import { isBreachedPromise } from "./promise";
 import { buildPlayForId, selectPlay } from "./plays";
 
 function stamp(caseId: string, actor: AuditEvent["actor"], action: string, reason: string, moneyDeltaInr?: number): AuditEvent {
@@ -52,6 +55,16 @@ function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
   };
 }
 
+function skippedExecution(reason: string, provider: ExecutionResult["provider"]): ExecutionResult {
+  return {
+    ok: true,
+    settled: false,
+    provider,
+    referenceId: uid("exec"),
+    message: reason,
+  };
+}
+
 export async function processCase(
   current: RunCase,
   policy: PolicyConfig,
@@ -78,6 +91,17 @@ export async function processCase(
     stamp(current.id, "agent", "detect", `${current.leakType} · ${inr(current.amountInr)} at risk`),
   );
 
+  if (isBreachedPromise(current, now)) {
+    timeline.push(
+      stamp(
+        current.id,
+        "policy",
+        "POLICY_DECISION",
+        `Promise-to-pay ${current.signals.promiseToPayDate} is past due. Hold released; recovery follows remaining policy.`,
+      ),
+    );
+  }
+
   const { diagnosis, agent } = await recommendRecovery(current, {
     policy,
     forceHeuristic: !opts?.useLiveLlm,
@@ -89,7 +113,7 @@ export async function processCase(
       current.id,
       "ai",
       "AI_DECISION",
-      `${decisionLabel}: ${agent.recommendedPlay} · predicted ${Math.round(agent.recoveryProbability * 100)}% · ${agent.provider} · ${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence)`,
+      `${decisionLabel}: ${agent.recommendedPlay} · predicted ${Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100)}% · ${agent.provider} · ${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence) · ${agent.reasoning.slice(0, 3).join("; ")}`,
     ),
   );
 
@@ -117,13 +141,31 @@ export async function processCase(
         current.id,
         "policy",
         "POLICY_DECISION",
-        `Recommended ${agent.recommendedPlay} → executed ${playId} (${verdict.action}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""}).`,
+        `Recommended ${agent.recommendedPlay} was not authorized. Policy ${verdict.action}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""} → ${playId}.`,
       ),
     );
   }
-  timeline.push(stamp(current.id, "agent", `play:${play.id}`, play.reason));
 
-  const execution = await executePlay(current, play, agent.rootCause);
+  const auth = authorizeExecution(verdict, policy, playId);
+
+  let execution: ExecutionResult;
+  if (!auth.execute) {
+    execution = skippedExecution(
+      auth.reason,
+      auth.executionStatus === "queued" || auth.executionStatus === "escalated" ? "operator" : "policy",
+    );
+    timeline.push(stamp(current.id, "policy", auth.auditAction, auth.reason));
+  } else {
+    execution = await executePlay(current, play, agent.rootCause);
+    timeline.push(
+      stamp(
+        current.id,
+        execution.provider === "operator" ? "human" : "agent",
+        "ACTION_EXECUTED",
+        execution.message,
+      ),
+    );
+  }
 
   let status: CaseStatus = "at_risk";
   let outcome: Outcome;
@@ -148,13 +190,13 @@ export async function processCase(
   } else if (verdict.action === "escalate") {
     status = "escalated";
     outcome = { status: "escalated", recoveredInr: 0, promisedInr: 0, note: verdict.reason };
-  } else if (!policy.autoExecute && play.id !== "stop") {
+  } else if (!auth.execute) {
     status = "escalated";
     outcome = {
       status: "escalated",
       recoveredInr: 0,
       promisedInr: 0,
-      note: "Auto-execute is off. Play is queued for operator approval.",
+      note: auth.reason,
     };
   } else if (play.id === "promise_to_pay") {
     const date = current.signals.promiseToPayDate ?? plusDays(now, 7);
@@ -184,16 +226,6 @@ export async function processCase(
     };
   }
 
-  timeline.push(
-    stamp(
-      current.id,
-      execution.provider === "operator" ? "human" : "agent",
-      "ACTION_EXECUTED",
-      execution.message,
-      outcome.recoveredInr || undefined,
-    ),
-  );
-
   if (outcome.recoveredInr > 0) {
     timeline.push(
       stamp(
@@ -201,30 +233,40 @@ export async function processCase(
         execution.provider === "razorpay" ? "ingest" : "agent",
         "PAYMENT_OUTCOME",
         execution.provider === "razorpay"
-          ? `Razorpay verified capture · ${inr(outcome.recoveredInr)} (AI predicted ${Math.round((current.agent ?? agent).recoveryProbability * 100)}%)`
-          : `Sandbox settlement · ${inr(outcome.recoveredInr)} · predicted ${Math.round(agent.recoveryProbability * 100)}% (prediction ≠ recovery)`,
+          ? `Razorpay verified capture · ${inr(outcome.recoveredInr)} (AI predicted ${Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100)}%)`
+          : `Sandbox settlement · ${inr(outcome.recoveredInr)} · predicted ${Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100)}% (prediction ≠ recovery)`,
+        outcome.recoveredInr,
+      ),
+    );
+    timeline.push(
+      stamp(
+        current.id,
+        "agent",
+        "RECOVERY_RESULT",
+        `actualRecovered ${inr(outcome.recoveredInr)}`,
         outcome.recoveredInr,
       ),
     );
   }
 
-  const next: RunCase = bumpContacts(
-    {
-      ...current,
-      status,
-      diagnosis,
-      agent,
-      policy: verdict,
-      play,
-      outcome,
-      execution,
-      paymentLinkUrl: execution.paymentLinkUrl ?? current.paymentLinkUrl,
-      timeline: [...current.timeline, ...timeline],
-      updatedAt: ts,
-    },
+  let next: RunCase = {
+    ...current,
+    status,
+    diagnosis,
+    agent,
+    policy: verdict,
     play,
-    ts,
-  );
+    outcome,
+    execution,
+    executionStatus: auth.executionStatus,
+    paymentLinkUrl: auth.execute ? (execution.paymentLinkUrl ?? current.paymentLinkUrl) : current.paymentLinkUrl,
+    timeline: [...current.timeline, ...timeline],
+    updatedAt: ts,
+  };
+
+  if (auth.execute) {
+    next = bumpContacts(next, play, ts);
+  }
 
   if (status === "promised" && outcome.promisedDate) {
     next.signals = { ...next.signals, promiseToPayDate: outcome.promisedDate };
@@ -232,7 +274,7 @@ export async function processCase(
   if (status === "recovered") {
     next.signals = { ...next.signals, promiseToPayDate: undefined };
   }
-  if (execution.provider === "razorpay") {
+  if (auth.execute && execution.provider === "razorpay") {
     next.signals = { ...next.signals, razorpayPaymentLinkId: execution.referenceId };
   }
 

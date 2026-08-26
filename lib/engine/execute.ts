@@ -88,6 +88,33 @@ function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): Execution
   };
 }
 
+export function executionFromIssuedLink(
+  link: { id: string; short_url: string },
+  playId: Play["id"],
+): ExecutionResult {
+  return {
+    ok: true,
+    settled: false,
+    provider: "razorpay",
+    referenceId: link.id,
+    paymentLinkUrl: link.short_url,
+    message:
+      playId === "smart_retry"
+        ? `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
+        : `Razorpay payment link issued: ${link.short_url}`,
+  };
+}
+
+export function executionFromFailedLink(why: string): ExecutionResult {
+  return {
+    ok: false,
+    settled: false,
+    provider: "razorpay",
+    referenceId: uid("exec"),
+    message: `Razorpay payment link failed (${why}). Case stays at risk — not recovered.`,
+  };
+}
+
 export async function executePlay(seed: SeedCase, play: Play, cause: RootCause): Promise<ExecutionResult> {
   const sandbox = executeSandbox(seed, play, cause);
   const wantsLink =
@@ -103,22 +130,9 @@ export async function executePlay(seed: SeedCase, play: Play, cause: RootCause):
       contact: seed.customer.contact,
       description: `Nivaara recovery ${seed.id} · ${play.label}`,
     });
-    return {
-      ok: true,
-      settled: false,
-      provider: "razorpay",
-      referenceId: link.id,
-      paymentLinkUrl: link.short_url,
-      message:
-        play.id === "smart_retry"
-          ? `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
-          : `Razorpay payment link issued: ${link.short_url}`,
-    };
+    return executionFromIssuedLink(link, play.id);
   } catch (err) {
     const why = err instanceof Error ? err.message : "Razorpay error";
-    return {
-      ...sandbox,
-      message: `Razorpay link failed (${why}). Sandbox fallback: ${sandbox.message}`,
-    };
+    return executionFromFailedLink(why);
   }
 }

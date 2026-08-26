@@ -7,6 +7,7 @@ import {
   mandateRetryCount,
   recoveryWindowExpired,
 } from "./mandate";
+import { isActivePromise } from "./promise";
 
 function hourInTz(date: Date, timeZone: string): number {
   const hour = new Intl.DateTimeFormat("en-GB", {
@@ -63,16 +64,13 @@ export function evaluatePolicy(seed: SeedCase, policy: PolicyConfig, at?: Date):
         : "Chargeback open. Retrying the debit is a scheme violation.",
     };
   }
-  if (seed.signals.promiseToPayDate) {
-    const ptp = new Date(`${seed.signals.promiseToPayDate}T00:00:00+05:30`);
-    if (ptp.getTime() > now.getTime()) {
-      return {
-        allowed: false,
-        action: "hold",
-        ruleId: "promise-to-pay",
-        reason: `Active promise-to-pay until ${seed.signals.promiseToPayDate}. Hold all chases.`,
-      };
-    }
+  if (isActivePromise(seed, now)) {
+    return {
+      allowed: false,
+      action: "hold",
+      ruleId: "promise-to-pay",
+      reason: `Active promise-to-pay until ${seed.signals.promiseToPayDate}. Hold all chases.`,
+    };
   }
   if (recoveryWindowExpired(seed, policy, now)) {
     return {

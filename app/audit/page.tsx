@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
 import { inr, ist } from "@/lib/format";
 
@@ -9,13 +9,15 @@ export default function AuditPage() {
   const [actor, setActor] = useState("all");
   const [q, setQ] = useState("");
 
-  const reload = useCallback(async () => {
-    setView(await loadWorkspace());
-  }, []);
-
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    let cancelled = false;
+    loadWorkspace().then((next) => {
+      if (!cancelled) setView(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const events = useMemo(() => {
     if (!view) return [];
@@ -63,7 +65,8 @@ export default function AuditPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Audit trail</h1>
           <p className="text-sm text-muted mt-1">
-            AI_DECISION, POLICY_DECISION, ACTION_EXECUTED, PAYMENT_OUTCOME. Export for judges.
+            AI_DECISION, POLICY_DECISION, ACTION_EXECUTED / BLOCKED / HELD / ESCALATED, PAYMENT_OUTCOME,
+            RECOVERY_RESULT. Export for judges.
           </p>
         </div>
         <div className="flex gap-2">

@@ -20,10 +20,11 @@ function observedHistory(seed: SeedCase) {
     contactsLast7Days: seed.signals.contactsLast7Days,
     retryCount: seed.signals.retryCount,
     mandateRetryCount: seed.signals.mandateRetryCount ?? 0,
+    lastContactAt: seed.signals.lastContactAt,
   };
 }
 
-/** Structured context the recovery agent reads before recommending. Never includes ground-truth propensity. */
+/** Structured context the recovery agent reads before recommending. Never includes ground-truth propensity or latent seeds. */
 export function gatherCaseContext(seed: SeedCase): CaseContext {
   const history = observedHistory(seed);
   const ctx: CaseContext = {
@@ -31,8 +32,8 @@ export function gatherCaseContext(seed: SeedCase): CaseContext {
     leakType: seed.leakType,
     amountInr: seed.amountInr,
     segment: seed.merchantSegment,
-    customer: seed.customer,
-    signals: seed.signals,
+    customer: { ...seed.customer },
+    signals: { ...seed.signals, flags: [...seed.signals.flags] },
     customerHistory: history,
   };
 
