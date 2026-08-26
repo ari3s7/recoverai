@@ -10,6 +10,7 @@ function isAction(body: unknown): body is CaseActionRequest {
   const type = (body as { type?: unknown }).type;
   return (
     type === "run" ||
+    type === "live_ai" ||
     type === "stop" ||
     type === "escalate" ||
     type === "mark_recovered" ||

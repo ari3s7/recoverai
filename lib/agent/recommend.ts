@@ -15,6 +15,7 @@ import type {
   SeedCase,
 } from "../types";
 import { gatherCaseContext } from "./context";
+import { interpretCustomerIntent } from "./intent";
 import { rankPlays } from "./score";
 import { isValidPlayId } from "./validate";
 
@@ -44,6 +45,7 @@ function heuristicRecommend(
   dx: Diagnosis,
   seed: SeedCase,
   policy = DEFAULT_POLICY,
+  utterance?: string,
 ): AgentRecommendation {
   const ranked = rankPlays(ctx, dx.rootCause, seed);
   const actionable = ranked.filter((r) => r.play !== "stop" && r.play !== "human_escalate");
@@ -70,6 +72,12 @@ function heuristicRecommend(
     chosen = "human_escalate";
   }
 
+  const intent = utterance ? interpretCustomerIntent(utterance) : null;
+  if (intent && intent.play !== "stop") {
+    chosen = intent.play;
+  }
+  if (intent?.play === "stop") chosen = "stop";
+
   const score =
     ranked.find((r) => r.play === chosen)?.score ??
     (chosen === "human_escalate" || chosen === "stop" ? 0 : 0.2);
@@ -87,6 +95,9 @@ function heuristicRecommend(
       ? `${PLAY_LABEL[chosen]} estimated ${Math.round(score * 100)}% vs ${PLAY_LABEL[runnerUp.play]} ${Math.round(runnerUp.estimatedRecovery * 100)}%`
       : `Best-fit play ${PLAY_LABEL[chosen]} at ${Math.round(score * 100)}% estimated recovery`,
   ];
+  if (intent) {
+    reasoning.unshift(intent.reply);
+  }
   if (ctx.mandateContext) reasoning.push(`Mandate sequencer: ${ctx.mandateContext}`);
   if (h.contactsLast7Days) reasoning.push(`${h.contactsLast7Days} contacts in the last 7 days`);
 
@@ -112,7 +123,12 @@ function extractJson(text: string): Record<string, unknown> | null {
   }
 }
 
-async function llmRecommend(ctx: CaseContext, dx: Diagnosis, seed: SeedCase): Promise<AgentRecommendation | null> {
+async function llmRecommend(
+  ctx: CaseContext,
+  dx: Diagnosis,
+  seed: SeedCase,
+  utterance?: string,
+): Promise<AgentRecommendation | null> {
   const ranked = rankPlays(ctx, dx.rootCause, seed);
   const payload = {
     context: {
@@ -130,6 +146,7 @@ async function llmRecommend(ctx: CaseContext, dx: Diagnosis, seed: SeedCase): Pr
       customerHistory: ctx.customerHistory,
       flags: ctx.signals.flags,
     },
+    customerUtterance: utterance ?? null,
     gatewayHint: { rootCause: dx.rootCause, label: dx.label },
     playScores: compared(ranked),
     allowedPlays: [
@@ -224,6 +241,7 @@ function parseLlmJson(
 export function recommendRecoveryHeuristic(
   seed: SeedCase,
   policy: PolicyConfig = DEFAULT_POLICY,
+  utterance?: string,
 ): {
   context: CaseContext;
   diagnosis: Diagnosis;
@@ -231,13 +249,13 @@ export function recommendRecoveryHeuristic(
 } {
   const context = gatherCaseContext(seed);
   const diagnosis = diagnose(seed);
-  const agent = heuristicRecommend(context, diagnosis, seed, policy);
+  const agent = heuristicRecommend(context, diagnosis, seed, policy, utterance);
   return { context, diagnosis, agent };
 }
 
 export async function recommendRecovery(
   seed: SeedCase,
-  opts?: { forceHeuristic?: boolean; policy?: PolicyConfig },
+  opts?: { forceHeuristic?: boolean; policy?: PolicyConfig; utterance?: string },
 ): Promise<{
   context: CaseContext;
   diagnosis: Diagnosis;
@@ -245,11 +263,11 @@ export async function recommendRecovery(
 }> {
   const policy = opts?.policy ?? DEFAULT_POLICY;
   if (!llmConfigured() || opts?.forceHeuristic) {
-    return recommendRecoveryHeuristic(seed, policy);
+    return recommendRecoveryHeuristic(seed, policy, opts?.utterance);
   }
   const context = gatherCaseContext(seed);
   const diagnosis = diagnose(seed);
-  const llm = await llmRecommend(context, diagnosis, seed);
-  const agent = llm ?? heuristicRecommend(context, diagnosis, seed, policy);
+  const llm = await llmRecommend(context, diagnosis, seed, opts?.utterance);
+  const agent = llm ?? heuristicRecommend(context, diagnosis, seed, policy, opts?.utterance);
   return { context, diagnosis, agent };
 }

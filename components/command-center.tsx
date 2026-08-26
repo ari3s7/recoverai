@@ -175,7 +175,7 @@ export function CommandCenter() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Command center</h1>
           <p className="text-sm text-muted mt-1">
-            Detect revenue at risk, bound the play with policy, execute, measure rupees recovered.
+            Detect revenue at risk, apply the RecoverAI recovery policy, bound it with merchant guardrails, execute, measure rupees recovered.
           </p>
         </div>
         <div className="flex gap-2">
@@ -208,7 +208,7 @@ export function CommandCenter() {
         <section className="rounded-lg border border-line bg-panel overflow-hidden">
           <div className="px-4 py-3 border-b border-line flex flex-wrap items-center gap-2">
             <div className="text-xs uppercase tracking-wide text-muted mr-2">Pipeline</div>
-            {["Detect", "AI decide", "Policy", "Act", "Outcome"].map((step, i) => (
+            {["Detect", "Decide", "Policy", "Act", "Outcome"].map((step, i) => (
               <span
                 key={step}
                 className={`text-xs px-2 py-1 rounded ${running ? "text-gold border border-gold/30" : "text-muted border border-line"}`}

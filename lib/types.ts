@@ -82,6 +82,7 @@ export type CaseSignals = {
   successfulPayments?: number;
   failedPayments?: number;
   avgPaymentInr?: number;
+  avgPaymentDelayDays?: number;
   priorRecoveries?: number;
   subscriptionAgeMonths?: number;
   previousAbandonments?: number;
@@ -106,6 +107,11 @@ export type SeedCase = {
    * and never copied into CaseContext. Observed history is what the agent sees.
    */
   groundTruthPropensity?: number;
+  /**
+   * Hidden paired evaluation draw in [0, 1]. Same value is compared against
+   * baseline and RecoverAI conversion probabilities. Never sent to the AI.
+   */
+  latentOutcomeSeed?: number;
 };
 
 export type Diagnosis = {
@@ -177,6 +183,7 @@ export type CaseContext = {
     successfulPayments: number;
     failedPayments: number;
     avgPaymentInr: number;
+    avgPaymentDelayDays: number;
     priorRecoveries: number;
     subscriptionAgeMonths: number;
     previousAbandonments: number;
@@ -189,7 +196,7 @@ export type CaseContext = {
 };
 
 export type EvaluationStrategyMetrics = {
-  strategy: "baseline" | "recoverai_agent";
+  strategy: "baseline" | "recoverai_policy";
   exposureInr: number;
   recoveredInr: number;
   recoveryRate: number;
@@ -200,17 +207,34 @@ export type EvaluationStrategyMetrics = {
   promisedCount: number;
   promisedFulfilledCount: number;
   actionsPerRecovery: number;
+  avgPredictedProbability: number;
   byLeak: Record<LeakType, { exposureInr: number; recoveredInr: number; count: number }>;
+};
+
+export type CalibrationBucket = {
+  bucket: string;
+  count: number;
+  avgPredicted: number;
+  actualRecoveryRate: number;
 };
 
 export type EvaluationReport = {
   caseCount: number;
   baseline: EvaluationStrategyMetrics;
-  agent: EvaluationStrategyMetrics;
+  policy: EvaluationStrategyMetrics;
   incrementalRecoveredInr: number;
   recoveryLiftPct: number;
+  recoveryRateLiftPct: number;
+  actionEfficiencyDelta: number;
+  escalationDelta: number;
   dataset: "synthetic" | "seed";
   ranAt: string;
+  /** Always recoverai_policy for the bulk experiment — LLM is not called. */
+  decisionMode: "recoverai_policy";
+  llmCalls: number;
+  paired: true;
+  calibration: CalibrationBucket[];
+  brierScore: number;
 };
 
 export type ExecutionResult = {
@@ -308,6 +332,7 @@ export type BatchStreamEvent =
 
 export type CaseActionRequest =
   | { type: "run" }
+  | { type: "live_ai"; utterance?: string }
   | { type: "stop"; reason: string }
   | { type: "escalate"; reason: string }
   | { type: "mark_recovered"; amountInr?: number; note?: string }

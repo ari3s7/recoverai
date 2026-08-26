@@ -11,6 +11,7 @@ function observedHistory(seed: SeedCase) {
     successfulPayments: successful,
     failedPayments: failed,
     avgPaymentInr: seed.signals.avgPaymentInr ?? seed.amountInr,
+    avgPaymentDelayDays: seed.signals.avgPaymentDelayDays ?? 0,
     priorRecoveries: seed.signals.priorRecoveries ?? 0,
     subscriptionAgeMonths: seed.signals.subscriptionAgeMonths ?? 0,
     previousAbandonments: seed.signals.previousAbandonments ?? 0,

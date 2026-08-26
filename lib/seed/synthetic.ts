@@ -138,6 +138,7 @@ export function generateSyntheticCases(count: number): SeedCase[] {
       occurredAt,
       merchantSegment: leak === "overdue_invoice" ? "b2b" : "d2c",
       groundTruthPropensity,
+      latentOutcomeSeed: sandboxUnit(id, "paired-latent"),
       signals: {
         retryCount,
         contactsLast7Days,
@@ -146,6 +147,7 @@ export function generateSyntheticCases(count: number): SeedCase[] {
         successfulPayments,
         failedPayments,
         avgPaymentInr: amountInr,
+        avgPaymentDelayDays: persona === "loyal" ? Math.round(u1 * 3) : persona === "typical" ? Math.round(2 + u1 * 6) : Math.round(5 + u3 * 12),
         priorRecoveries: persona === "loyal" ? Math.floor(u1 * 2) : 0,
         subscriptionAgeMonths:
           leak === "failed_subscription" || leak === "mandate_failure" ? Math.round(2 + u2 * 24) : 0,

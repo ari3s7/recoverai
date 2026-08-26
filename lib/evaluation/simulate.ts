@@ -1,7 +1,7 @@
 import { baselineRecommendPlay } from "../engine/baseline";
 import { diagnose } from "../engine/diagnose";
 import { clampPlayToPolicy, evaluatePolicy } from "../engine/policy";
-import { settleAgainstGroundTruth } from "../engine/groundTruth";
+import { groundTruthProbability, settleAgainstGroundTruth } from "../engine/groundTruth";
 import type { CaseStatus, LeakType, PlayId, PolicyConfig, RootCause, SeedCase } from "../types";
 
 export type SimRow = {
@@ -14,6 +14,9 @@ export type SimRow = {
   playId: PlayId;
   promised: boolean;
   promisedFulfilled: boolean;
+  predictedProbability: number;
+  groundTruthProbability: number;
+  actualRecovered: boolean;
 };
 
 function cloneSeed(seed: SeedCase): SeedCase {
@@ -34,102 +37,95 @@ function bump(working: SeedCase, playId: PlayId, nowIso: string) {
   }
 }
 
+function row(
+  seed: SeedCase,
+  partial: Omit<SimRow, "leakType" | "exposureInr">,
+): SimRow {
+  return {
+    leakType: seed.leakType,
+    exposureInr: seed.amountInr,
+    ...partial,
+  };
+}
+
 export function simulateStrategy(
   seed: SeedCase,
   pickPlay: (current: SeedCase, cause: RootCause) => PlayId,
   policy: PolicyConfig,
   at: Date,
+  predict?: (current: SeedCase, playId: PlayId, cause: RootCause) => number,
 ): SimRow {
   const working = cloneSeed(seed);
   const nowIso = at.toISOString();
   let actionCount = 0;
   let lastPlay: PlayId = "stop";
   let promised = false;
+  let lastPredicted = 0;
+  let lastTruth = 0;
+
+  const empty = (
+    status: CaseStatus,
+    extra: Partial<SimRow> & { playId: PlayId; actionCount: number },
+  ): SimRow =>
+    row(seed, {
+      recoveredInr: 0,
+      status,
+      actionTaken: extra.actionCount > 0 || extra.playId === "human_escalate",
+      promised,
+      promisedFulfilled: false,
+      predictedProbability: lastPredicted,
+      groundTruthProbability: lastTruth,
+      actualRecovered: false,
+      ...extra,
+    });
 
   for (let step = 0; step < 3; step++) {
     const cause = diagnose(working).rootCause;
     const verdict = evaluatePolicy(working, policy, at);
 
     if (verdict.action === "stop") {
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
-        recoveredInr: 0,
-        status: "stopped",
-        actionTaken: actionCount > 0,
-        actionCount,
-        playId: lastPlay,
-        promised,
-        promisedFulfilled: false,
-      };
+      return empty("stopped", { playId: lastPlay, actionCount, actionTaken: actionCount > 0 });
     }
     if (verdict.action === "hold") {
       const isPtp = verdict.ruleId === "promise-to-pay";
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
-        recoveredInr: 0,
-        status: isPtp ? "promised" : "held",
-        actionTaken: actionCount > 0,
-        actionCount,
+      return empty(isPtp ? "promised" : "held", {
         playId: lastPlay,
-        promised: isPtp,
-        promisedFulfilled: false,
-      };
+        actionCount,
+        actionTaken: actionCount > 0,
+        promised: isPtp || promised,
+      });
     }
     if (verdict.action === "escalate") {
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
-        recoveredInr: 0,
-        status: "escalated",
-        actionTaken: true,
-        actionCount: actionCount + 1,
+      return empty("escalated", {
         playId: "human_escalate",
-        promised,
-        promisedFulfilled: false,
-      };
+        actionCount: actionCount + 1,
+        actionTaken: true,
+      });
     }
 
     const raw = pickPlay(working, cause);
     const playId = clampPlayToPolicy(raw, working, policy, verdict, at);
     lastPlay = playId;
+    lastPredicted = predict?.(working, playId, cause) ?? 0;
+    lastTruth = groundTruthProbability(working, cause, playId);
 
     if (playId === "stop") {
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
-        recoveredInr: 0,
-        status: "stopped",
-        actionTaken: actionCount > 0,
-        actionCount,
-        playId,
-        promised,
-        promisedFulfilled: false,
-      };
+      return empty("stopped", { playId, actionCount, actionTaken: actionCount > 0 });
     }
     if (playId === "human_escalate") {
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
-        recoveredInr: 0,
-        status: "escalated",
-        actionTaken: true,
-        actionCount: actionCount + 1,
+      return empty("escalated", {
         playId,
-        promised,
-        promisedFulfilled: false,
-      };
+        actionCount: actionCount + 1,
+        actionTaken: true,
+      });
     }
 
     actionCount += 1;
 
     if (playId === "promise_to_pay") {
       promised = true;
-      const fulfilled = settleAgainstGroundTruth(working, cause, "promise_to_pay", `ptp-${step}`);
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
+      const fulfilled = settleAgainstGroundTruth(working, cause, "promise_to_pay");
+      return row(seed, {
         recoveredInr: fulfilled ? seed.amountInr : 0,
         status: fulfilled ? "recovered" : "promised",
         actionTaken: true,
@@ -137,14 +133,15 @@ export function simulateStrategy(
         playId,
         promised: true,
         promisedFulfilled: fulfilled,
-      };
+        predictedProbability: lastPredicted,
+        groundTruthProbability: lastTruth,
+        actualRecovered: fulfilled,
+      });
     }
 
-    const settled = settleAgainstGroundTruth(working, cause, playId, `${playId}-sim-${step}`);
+    const settled = settleAgainstGroundTruth(working, cause, playId);
     if (settled) {
-      return {
-        leakType: seed.leakType,
-        exposureInr: seed.amountInr,
+      return row(seed, {
         recoveredInr: seed.amountInr,
         status: "recovered",
         actionTaken: true,
@@ -152,24 +149,21 @@ export function simulateStrategy(
         playId,
         promised,
         promisedFulfilled: false,
-      };
+        predictedProbability: lastPredicted,
+        groundTruthProbability: lastTruth,
+        actualRecovered: true,
+      });
     }
 
     bump(working, playId, nowIso);
     if (playId !== "smart_retry") break;
   }
 
-  return {
-    leakType: seed.leakType,
-    exposureInr: seed.amountInr,
-    recoveredInr: 0,
-    status: "at_risk",
-    actionTaken: actionCount > 0,
-    actionCount,
+  return empty("at_risk", {
     playId: lastPlay,
-    promised,
-    promisedFulfilled: false,
-  };
+    actionCount,
+    actionTaken: actionCount > 0,
+  });
 }
 
 export function pickBaselinePlay(current: SeedCase, cause?: RootCause): PlayId {

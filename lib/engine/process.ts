@@ -52,34 +52,56 @@ function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
   };
 }
 
-export async function processCase(current: RunCase, policy: PolicyConfig, now: Date): Promise<RunCase> {
+export async function processCase(
+  current: RunCase,
+  policy: PolicyConfig,
+  now: Date,
+  opts?: { useLiveLlm?: boolean; utterance?: string },
+): Promise<RunCase> {
   const ts = now.toISOString();
+  if (current.status === "recovered" && (current.outcome?.recoveredInr ?? 0) > 0) {
+    const event = stamp(
+      current.id,
+      "policy",
+      "POLICY_DECISION",
+      "Payment already succeeded. Recovery sequence stopped.",
+    );
+    return {
+      ...current,
+      timeline: [...current.timeline, event],
+      updatedAt: ts,
+    };
+  }
   const timeline: AuditEvent[] = [];
 
   timeline.push(
     stamp(current.id, "agent", "detect", `${current.leakType} · ${inr(current.amountInr)} at risk`),
   );
 
-  const { diagnosis, agent } = await recommendRecovery(current, { policy });
+  const { diagnosis, agent } = await recommendRecovery(current, {
+    policy,
+    forceHeuristic: !opts?.useLiveLlm,
+    utterance: opts?.utterance,
+  });
+  const decisionLabel = agent.provider === "heuristic" ? "RecoverAI recovery policy" : "Live AI agent";
   timeline.push(
     stamp(
       current.id,
       "ai",
-      "recommend",
-      `${agent.recommendedPlay} · predicted ${Math.round(agent.recoveryProbability * 100)}% recovery · ${agent.provider}`,
-    ),
-  );
-  timeline.push(
-    stamp(
-      current.id,
-      "ai",
-      "diagnose",
-      `${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence)`,
+      "AI_DECISION",
+      `${decisionLabel}: ${agent.recommendedPlay} · predicted ${Math.round(agent.recoveryProbability * 100)}% · ${agent.provider} · ${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence)`,
     ),
   );
 
   const verdict = evaluatePolicy(current, policy, now);
-  timeline.push(stamp(current.id, "policy", verdict.ruleId ?? verdict.action, verdict.reason));
+  timeline.push(
+    stamp(
+      current.id,
+      "policy",
+      "POLICY_DECISION",
+      `${verdict.action}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""}: ${verdict.reason}`,
+    ),
+  );
 
   const ruleFallback = selectPlay(current, diagnosis, verdict);
   const playId = resolvePlayAfterPolicy(agent, verdict, ruleFallback.id, current, policy, now);
@@ -89,13 +111,13 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
     playId,
     `AI recommended ${agent.recommendedPlay}. Policy resolved to ${playId}. ${agent.reasoning[0] ?? ""}`,
   );
-  if (playId !== agent.recommendedPlay && verdict.action === "proceed") {
+  if (playId !== agent.recommendedPlay) {
     timeline.push(
       stamp(
         current.id,
         "policy",
-        "play-clamp",
-        `Agent suggested ${agent.recommendedPlay}; executing ${playId} after policy merge.`,
+        "POLICY_DECISION",
+        `Recommended ${agent.recommendedPlay} → executed ${playId} (${verdict.action}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""}).`,
       ),
     );
   }
@@ -166,7 +188,7 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
     stamp(
       current.id,
       execution.provider === "operator" ? "human" : "agent",
-      "execute",
+      "ACTION_EXECUTED",
       execution.message,
       outcome.recoveredInr || undefined,
     ),
@@ -177,10 +199,10 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
       stamp(
         current.id,
         execution.provider === "razorpay" ? "ingest" : "agent",
-        "outcome.settled",
+        "PAYMENT_OUTCOME",
         execution.provider === "razorpay"
           ? `Razorpay verified capture · ${inr(outcome.recoveredInr)} (AI predicted ${Math.round((current.agent ?? agent).recoveryProbability * 100)}%)`
-          : `Sandbox settlement · ${inr(outcome.recoveredInr)} · AI predicted ${Math.round(agent.recoveryProbability * 100)}% (prediction ≠ recovery)`,
+          : `Sandbox settlement · ${inr(outcome.recoveredInr)} · predicted ${Math.round(agent.recoveryProbability * 100)}% (prediction ≠ recovery)`,
         outcome.recoveredInr,
       ),
     );

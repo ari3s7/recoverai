@@ -45,3 +45,39 @@ export function nextMandateStep(seed: SeedCase, policy: PolicyConfig, at: Date):
   if (mandateCooldownActive(seed, policy, at)) return "payment_link";
   return "smart_retry";
 }
+
+export type MandateSequence = {
+  attempt: number;
+  maxAttempts: number;
+  cooldownActive: boolean;
+  windowExpired: boolean;
+  nextEligiblePlay: PlayId;
+  reason: string;
+};
+
+/** Stateful snapshot for the mandate sequencer UI — policy still has to allow the next play. */
+export function describeMandateSequence(seed: SeedCase, policy: PolicyConfig, at: Date): MandateSequence {
+  const attempt = mandateRetryCount(seed);
+  const cooldownActive = mandateCooldownActive(seed, policy, at);
+  const windowExpired = recoveryWindowExpired(seed, policy, at);
+  const nextEligiblePlay = nextMandateStep(seed, policy, at);
+  let reason = `Retry ${attempt}/${policy.maxMandateRetries}.`;
+  if (windowExpired) reason = "Recovery window expired. Stop.";
+  else if (seed.signals.declineCode === "MANDATE_REVOKED" || seed.signals.subReason === "mandate_revoked") {
+    reason = "Mandate revoked. Do not retry the dead token — send a fresh payment link.";
+  } else if (attempt >= policy.maxMandateRetries) {
+    reason = "Retry cap reached. Switch to payment-link re-authorization.";
+  } else if (cooldownActive) {
+    reason = `Cooldown ${policy.mandateRetryCooldownHours}h still active. Defer debit or send a link.`;
+  } else {
+    reason = `Eligible for mandate retry ${attempt + 1}/${policy.maxMandateRetries}.`;
+  }
+  return {
+    attempt,
+    maxAttempts: policy.maxMandateRetries,
+    cooldownActive,
+    windowExpired,
+    nextEligiblePlay,
+    reason,
+  };
+}

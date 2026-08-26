@@ -149,6 +149,7 @@ export function seedCaseFromDraft(draft: Draft, index: number): SeedCase {
       successfulPayments,
       failedPayments,
       avgPaymentInr: draft.amount,
+      avgPaymentDelayDays: draft.segment === "b2b" ? 8 + (index % 12) : index % 5,
       priorRecoveries: retries >= 2 ? 1 : 0,
       subscriptionAgeMonths:
         draft.leak === "failed_subscription" || draft.leak === "mandate_failure" ? 4 + (index % 20) : 0,

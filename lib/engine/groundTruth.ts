@@ -40,12 +40,18 @@ export function groundTruthProbability(seed: SeedCase, cause: RootCause, playId:
   return clamp01(latent * fit * contactPenalty * retryPenalty * 1.35);
 }
 
+export function pairedLatent(seed: SeedCase): number {
+  if (typeof seed.latentOutcomeSeed === "number" && Number.isFinite(seed.latentOutcomeSeed)) {
+    return Math.min(0.9999, Math.max(0, seed.latentOutcomeSeed));
+  }
+  return sandboxUnit(seed.id, "paired-latent");
+}
+
 export function settleAgainstGroundTruth(
   seed: SeedCase,
   cause: RootCause,
   playId: PlayId,
-  salt: string,
 ): boolean {
   const p = groundTruthProbability(seed, cause, playId);
-  return sandboxUnit(seed.id, salt) < p;
+  return pairedLatent(seed) < p;
 }

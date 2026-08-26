@@ -53,7 +53,7 @@ function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): Execution
     };
   }
 
-  const recovered = settleAgainstGroundTruth(seed, cause, play.id, `${play.id}-live`);
+  const recovered = settleAgainstGroundTruth(seed, cause, play.id);
 
   if (play.id === "smart_retry") {
     return {

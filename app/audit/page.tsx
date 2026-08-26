@@ -63,7 +63,7 @@ export default function AuditPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Audit trail</h1>
           <p className="text-sm text-muted mt-1">
-            Every detect, diagnose, policy stop, play, and rupee delta. Export for judges.
+            AI_DECISION, POLICY_DECISION, ACTION_EXECUTED, PAYMENT_OUTCOME. Export for judges.
           </p>
         </div>
         <div className="flex gap-2">
@@ -85,6 +85,7 @@ export default function AuditPage() {
           className="bg-panel border border-line rounded px-2 py-1 text-sm"
         >
           <option value="all">All actors</option>
+          <option value="ai">ai</option>
           <option value="agent">agent</option>
           <option value="policy">policy</option>
           <option value="human">human</option>

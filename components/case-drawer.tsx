@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { CAUSE_LABEL, inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
+import { describeMandateSequence, isMandateCase } from "@/lib/engine/mandate";
+import { DEFAULT_POLICY } from "@/lib/policy/defaults";
 import type { CaseActionRequest, RunCase } from "@/lib/types";
 import { StatusPill } from "./status-pill";
 
@@ -54,6 +56,9 @@ export function CaseDrawer({
 
   if (!cse) return null;
   const open = cse;
+  const mandate = isMandateCase(cse)
+    ? describeMandateSequence(cse, DEFAULT_POLICY, new Date(DEFAULT_POLICY.sandboxClockIso))
+    : null;
 
   async function polish() {
     setPolishing(true);
@@ -106,21 +111,39 @@ export function CaseDrawer({
             <p className="text-xs text-muted mt-2">
               History: {cse.signals.successfulPayments ?? "—"}/{cse.signals.lifetimePayments ?? "—"} payments
               succeeded
+              {typeof cse.signals.avgPaymentDelayDays === "number"
+                ? ` · avg delay ${cse.signals.avgPaymentDelayDays}d`
+                : ""}
               {cse.signals.retryCount ? ` · ${cse.signals.retryCount} retries` : ""}
               {cse.signals.mandateRetryCount ? ` · mandate retry ${cse.signals.mandateRetryCount}` : ""}
+              {cse.signals.priorRecoveries ? ` · ${cse.signals.priorRecoveries} prior recoveries` : ""}
             </p>
           </section>
+
+          {mandate ? (
+            <section className="rounded-lg border border-line p-3 space-y-1">
+              <Label>Mandate sequencer</Label>
+              <p className="font-medium">
+                Attempt {mandate.attempt}/{mandate.maxAttempts} · next {PLAY_LABEL[mandate.nextEligiblePlay]}
+              </p>
+              <p className="text-xs text-muted">{mandate.reason}</p>
+              {mandate.windowExpired ? <p className="text-xs text-danger">Window expired — stop.</p> : null}
+              {mandate.cooldownActive ? <p className="text-xs text-muted">Cooldown active.</p> : null}
+            </section>
+          ) : null}
 
           {cse.agent ? (
             <section className="rounded-lg border border-gold/30 bg-gold/5 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Label>AI decision</Label>
+                <Label>
+                  {cse.agent.provider === "heuristic" ? "RecoverAI recovery policy" : "Live AI agent decision"}
+                </Label>
                 <span className="text-[10px] uppercase tracking-wide text-muted">{cse.agent.provider}</span>
               </div>
               <p className="font-medium text-gold">{PLAY_LABEL[cse.agent.recommendedPlay]}</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
-                  <span className="text-muted">Recovery probability</span>
+                  <span className="text-muted">Predicted recovery</span>
                   <p className="tabular font-medium">{Math.round(cse.agent.recoveryProbability * 100)}%</p>
                 </div>
                 <div>
@@ -138,7 +161,7 @@ export function CaseDrawer({
                   ))}
                 </ul>
               ) : null}
-              <p className="text-[10px] text-muted">Predicted recovery — not actual money</p>
+              <p className="text-[10px] text-muted">Predicted recovery — not money received</p>
               {cse.agent.comparedPlays?.length ? (
                 <div className="text-[11px] text-muted space-y-0.5">
                   {cse.agent.comparedPlays.map((row) => (
@@ -175,9 +198,9 @@ export function CaseDrawer({
             </p>
             <p className="text-muted mt-1">{cse.policy?.reason ?? "Stopping rules have not been evaluated yet."}</p>
             {cse.agent && cse.play && cse.agent.recommendedPlay !== cse.play.id ? (
-              <p className="text-xs text-muted mt-2">
-                AI suggested {PLAY_LABEL[cse.agent.recommendedPlay]}; policy/merge executed{" "}
-                {PLAY_LABEL[cse.play.id]}.
+              <p className="text-xs text-danger mt-2">
+                Recommended {PLAY_LABEL[cse.agent.recommendedPlay]} was not executed. Policy{" "}
+                {cse.policy?.action}: {PLAY_LABEL[cse.play.id]}.
               </p>
             ) : null}
           </section>
@@ -255,8 +278,29 @@ export function CaseDrawer({
 
           <div className="flex flex-wrap gap-2">
             <OpButton disabled={busy} onClick={() => onAction(cse.id, { type: "run" })}>
-              Run case
+              Run recovery policy
             </OpButton>
+            {llmConfigured ? (
+              <OpButton
+                disabled={busy}
+                onClick={() => onAction(cse.id, { type: "live_ai" })}
+              >
+                Live AI agent
+              </OpButton>
+            ) : null}
+            {cse.customer.language !== "english" ? (
+              <OpButton
+                disabled={busy}
+                onClick={() =>
+                  onAction(cse.id, {
+                    type: "live_ai",
+                    utterance: "Bhai payment nahi ho raha, link bhej do.",
+                  })
+                }
+              >
+                Hinglish “link bhej do”
+              </OpButton>
+            ) : null}
             {llmConfigured ? (
               <OpButton disabled={polishing || !cse.diagnosis} onClick={polish}>
                 {polishing ? "Polishing…" : "Polish copy"}

@@ -70,7 +70,7 @@ export async function POST(request: Request) {
         const ev = stamp(
           found.id,
           "ingest",
-          "razorpay.captured",
+          "PAYMENT_OUTCOME",
           `Razorpay captured ${payment?.id ?? link?.id ?? ""} · ${inr(amount)}`,
           amount,
         );

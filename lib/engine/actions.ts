@@ -15,6 +15,13 @@ export async function applyOperatorAction(
     return processCase({ ...current, lastBatchId: undefined }, policy, now);
   }
 
+  if (action.type === "live_ai") {
+    return processCase({ ...current, lastBatchId: undefined }, policy, now, {
+      useLiveLlm: true,
+      utterance: action.utterance,
+    });
+  }
+
   if (action.type === "stop") {
     const event = stamp(current.id, "human", "operator.stop", action.reason);
     return {
