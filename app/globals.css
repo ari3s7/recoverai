@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #050705;
-  --foreground: #e8ffe9;
-  --gold: #b8ff3d;
-  --gold-dim: #6fd14a;
-  --danger: #ff5c7a;
-  --ok: #7dffb3;
-  --muted: #7f9e84;
-  --panel: #0b120c;
-  --line: #1c3320;
-  --cyan: #5cf2ff;
+  --background: #000000;
+  --foreground: #f2ffe6;
+  --gold: #32cd32;
+  --gold-dim: #7cfc00;
+  --danger: #ff4d4d;
+  --ok: #90ee90;
+  --muted: #8aa08a;
+  --panel: #0a0a0a;
+  --line: #1a1a1a;
+  --cyan: #7cfc00;
 }
 
 @theme inline {
@@ -37,19 +37,17 @@ body {
 
 body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  background-image:
-    radial-gradient(ellipse 80% 50% at 50% -10%, #163018 0%, transparent 55%),
-    linear-gradient(#050705, #050705);
+  background: #000000;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #3d6b38 transparent;
+  scrollbar-color: #32cd32 #0a0a0a;
 }
 
 ::selection {
-  background: #b8ff3d44;
-  color: #050705;
+  background: #32cd3266;
+  color: #000000;
 }
 
 .tabular {
@@ -57,9 +55,9 @@ body {
 }
 
 .glow {
-  box-shadow: 0 0 0 1px #b8ff3d55, 0 0 18px #b8ff3d33;
+  box-shadow: 0 0 0 1px #32cd3266, 0 0 20px #32cd3244;
 }
 
 .text-gold {
-  text-shadow: 0 0 14px #b8ff3d55;
+  text-shadow: 0 0 12px #32cd3255;
 }

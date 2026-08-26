@@ -26,7 +26,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-full flex flex-col">
-      <header className="border-b border-gold/20 px-5 py-3 flex items-center gap-6 sticky top-0 z-30 bg-background/90 backdrop-blur">
+      <header className="border-b border-gold/25 px-5 py-3 flex items-center gap-6 sticky top-0 z-30 bg-black/90 backdrop-blur">
         <Link href="/" className="shrink-0">
           <div className="text-lg font-semibold tracking-tight leading-none text-gold">RecoverAI</div>
         </Link>
