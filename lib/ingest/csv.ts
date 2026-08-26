@@ -131,6 +131,7 @@ export function caseFromWebhook(payload: WebhookPayload, existingIds: string[]):
   let leak: LeakType = payload.leakType ?? "payment_failure";
   if (type.includes("checkout")) leak = "abandoned_checkout";
   if (type.includes("subscription")) leak = "failed_subscription";
+  if (type.includes("mandate")) leak = "mandate_failure";
   if (type.includes("invoice")) leak = "overdue_invoice";
   const amount = Math.round(payload.amountInr ?? payload.amount ?? 0);
   if (!amount) throw new Error("amountInr is required");

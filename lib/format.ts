@@ -43,6 +43,7 @@ export const LEAK_LABEL: Record<LeakType, string> = {
   abandoned_checkout: "Abandoned checkout",
   failed_subscription: "Failed subscription",
   overdue_invoice: "Overdue invoice",
+  mandate_failure: "Mandate failure",
 };
 
 export const CAUSE_LABEL: Record<RootCause, string> = {

@@ -2,7 +2,8 @@ export type LeakType =
   | "payment_failure"
   | "abandoned_checkout"
   | "failed_subscription"
-  | "overdue_invoice";
+  | "overdue_invoice"
+  | "mandate_failure";
 
 export type RootCause =
   | "insufficient_funds"
@@ -76,10 +77,19 @@ export type CaseSignals = {
   promiseToPayDate?: string;
   razorpayPaymentId?: string;
   razorpayPaymentLinkId?: string;
-  /** 0–1 share of successful historical payments (synthetic / enriched cases). */
   paymentSuccessRate?: number;
   lifetimePayments?: number;
+  successfulPayments?: number;
+  failedPayments?: number;
+  avgPaymentInr?: number;
   priorRecoveries?: number;
+  subscriptionAgeMonths?: number;
+  previousAbandonments?: number;
+  previousPromises?: number;
+  promiseFulfillmentRate?: number;
+  mandateRetryCount?: number;
+  lastRetryAt?: string;
+  recoveryWindowDays?: number;
   flags: Flag[];
 };
 
@@ -91,6 +101,11 @@ export type SeedCase = {
   occurredAt: string;
   merchantSegment: "d2c" | "b2b";
   signals: CaseSignals;
+  /**
+   * Hidden simulator conversion propensity (0–1). Never shown to the AI
+   * and never copied into CaseContext. Observed history is what the agent sees.
+   */
+  groundTruthPropensity?: number;
 };
 
 export type Diagnosis = {
@@ -126,14 +141,20 @@ export type Outcome = {
   note: string;
 };
 
+export type PlayEstimate = {
+  play: PlayId;
+  estimatedRecovery: number;
+};
+
 export type AgentRecommendation = {
   rootCause: RootCause;
   recoveryProbability: number;
   recommendedPlay: PlayId;
   confidence: number;
   reasoning: string[];
+  comparedPlays: PlayEstimate[];
   provider: "openai" | "gemini" | "heuristic";
-  /** Rule-only play for A/B comparison on the same case. */
+  /** Naive baseline play for A/B comparison on the same case. */
   baselinePlay: PlayId;
 };
 
@@ -149,12 +170,21 @@ export type CaseContext = {
   subscriptionContext?: string;
   invoiceContext?: string;
   promiseContext?: string;
+  mandateContext?: string;
   customerHistory: {
     paymentSuccessRate: number;
     lifetimePayments: number;
+    successfulPayments: number;
+    failedPayments: number;
+    avgPaymentInr: number;
     priorRecoveries: number;
+    subscriptionAgeMonths: number;
+    previousAbandonments: number;
+    previousPromises: number;
+    promiseFulfillmentRate: number;
     contactsLast7Days: number;
     retryCount: number;
+    mandateRetryCount: number;
   };
 };
 
@@ -168,6 +198,7 @@ export type EvaluationStrategyMetrics = {
   escalatedCount: number;
   stoppedCount: number;
   promisedCount: number;
+  promisedFulfilledCount: number;
   actionsPerRecovery: number;
   byLeak: Record<LeakType, { exposureInr: number; recoveredInr: number; count: number }>;
 };
@@ -225,6 +256,10 @@ export type PolicyConfig = {
   quietHoursEnd: number;
   highAovInr: number;
   b2bEscalateDpd: number;
+  maxRetries: number;
+  maxMandateRetries: number;
+  recoveryWindowDays: number;
+  mandateRetryCooldownHours: number;
   timezone: "Asia/Kolkata";
   autoExecute: boolean;
   sandboxClock: boolean;
@@ -294,6 +329,7 @@ export const LEAK_TYPES: LeakType[] = [
   "abandoned_checkout",
   "failed_subscription",
   "overdue_invoice",
+  "mandate_failure",
 ];
 
 export type RazorpayStatus = {

@@ -1,6 +1,7 @@
-import { sandboxUnit, recoveryProbability } from "../engine/execute";
-import { evaluatePolicy } from "../engine/policy";
+import { baselineRecommendPlay } from "../engine/baseline";
 import { diagnose } from "../engine/diagnose";
+import { clampPlayToPolicy, evaluatePolicy } from "../engine/policy";
+import { settleAgainstGroundTruth } from "../engine/groundTruth";
 import type { CaseStatus, LeakType, PlayId, PolicyConfig, RootCause, SeedCase } from "../types";
 
 export type SimRow = {
@@ -9,87 +10,171 @@ export type SimRow = {
   recoveredInr: number;
   status: CaseStatus;
   actionTaken: boolean;
+  actionCount: number;
   playId: PlayId;
+  promised: boolean;
+  promisedFulfilled: boolean;
 };
+
+function cloneSeed(seed: SeedCase): SeedCase {
+  return {
+    ...seed,
+    signals: { ...seed.signals, flags: [...seed.signals.flags] },
+  };
+}
+
+function bump(working: SeedCase, playId: PlayId, nowIso: string) {
+  if (playId !== "smart_retry" && playId !== "payment_link" && playId !== "hinglish_voice") return;
+  working.signals.contactsLast7Days += 1;
+  working.signals.lastContactAt = nowIso;
+  if (playId === "smart_retry") {
+    working.signals.retryCount += 1;
+    working.signals.mandateRetryCount = (working.signals.mandateRetryCount ?? 0) + 1;
+    working.signals.lastRetryAt = nowIso;
+  }
+}
 
 export function simulateStrategy(
   seed: SeedCase,
-  playId: PlayId,
+  pickPlay: (current: SeedCase, cause: RootCause) => PlayId,
   policy: PolicyConfig,
   at: Date,
-  _strategy: "baseline" | "recoverai_agent",
-  rootCause?: RootCause,
 ): SimRow {
-  const cause = rootCause ?? diagnose(seed).rootCause;
-  const verdict = evaluatePolicy(seed, policy, at);
+  const working = cloneSeed(seed);
+  const nowIso = at.toISOString();
+  let actionCount = 0;
+  let lastPlay: PlayId = "stop";
+  let promised = false;
 
-  if (verdict.action === "stop") {
-    return {
-      leakType: seed.leakType,
-      exposureInr: seed.amountInr,
-      recoveredInr: 0,
-      status: "stopped",
-      actionTaken: false,
-      playId: "stop",
-    };
-  }
-  if (verdict.action === "hold") {
-    return {
-      leakType: seed.leakType,
-      exposureInr: seed.amountInr,
-      recoveredInr: 0,
-      status: verdict.ruleId === "promise-to-pay" ? "promised" : "held",
-      actionTaken: false,
-      playId: "stop",
-    };
-  }
-  if (verdict.action === "escalate") {
-    return {
-      leakType: seed.leakType,
-      exposureInr: seed.amountInr,
-      recoveredInr: 0,
-      status: "escalated",
-      actionTaken: true,
-      playId: "human_escalate",
-    };
-  }
+  for (let step = 0; step < 3; step++) {
+    const cause = diagnose(working).rootCause;
+    const verdict = evaluatePolicy(working, policy, at);
 
-  let effectivePlay = playId;
-  if (effectivePlay === "stop" || effectivePlay === "human_escalate") {
-    return {
-      leakType: seed.leakType,
-      exposureInr: seed.amountInr,
-      recoveredInr: 0,
-      status: effectivePlay === "human_escalate" ? "escalated" : "stopped",
-      actionTaken: effectivePlay !== "stop",
-      playId: effectivePlay,
-    };
-  }
+    if (verdict.action === "stop") {
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: 0,
+        status: "stopped",
+        actionTaken: actionCount > 0,
+        actionCount,
+        playId: lastPlay,
+        promised,
+        promisedFulfilled: false,
+      };
+    }
+    if (verdict.action === "hold") {
+      const isPtp = verdict.ruleId === "promise-to-pay";
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: 0,
+        status: isPtp ? "promised" : "held",
+        actionTaken: actionCount > 0,
+        actionCount,
+        playId: lastPlay,
+        promised: isPtp,
+        promisedFulfilled: false,
+      };
+    }
+    if (verdict.action === "escalate") {
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: 0,
+        status: "escalated",
+        actionTaken: true,
+        actionCount: actionCount + 1,
+        playId: "human_escalate",
+        promised,
+        promisedFulfilled: false,
+      };
+    }
 
-  if (effectivePlay === "promise_to_pay") {
-    return {
-      leakType: seed.leakType,
-      exposureInr: seed.amountInr,
-      recoveredInr: 0,
-      status: "promised",
-      actionTaken: true,
-      playId: effectivePlay,
-    };
-  }
+    const raw = pickPlay(working, cause);
+    const playId = clampPlayToPolicy(raw, working, policy, verdict, at);
+    lastPlay = playId;
 
-  const hist =
-    seed.signals.paymentSuccessRate ??
-    0.55 + sandboxUnit(seed.id, "hist") * 0.4;
-  const p = recoveryProbability(cause, effectivePlay) * (0.7 + hist * 0.35);
-  const roll = sandboxUnit(seed.id, `${effectivePlay}-sim`);
-  const settled = roll < p;
+    if (playId === "stop") {
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: 0,
+        status: "stopped",
+        actionTaken: actionCount > 0,
+        actionCount,
+        playId,
+        promised,
+        promisedFulfilled: false,
+      };
+    }
+    if (playId === "human_escalate") {
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: 0,
+        status: "escalated",
+        actionTaken: true,
+        actionCount: actionCount + 1,
+        playId,
+        promised,
+        promisedFulfilled: false,
+      };
+    }
+
+    actionCount += 1;
+
+    if (playId === "promise_to_pay") {
+      promised = true;
+      const fulfilled = settleAgainstGroundTruth(working, cause, "promise_to_pay", `ptp-${step}`);
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: fulfilled ? seed.amountInr : 0,
+        status: fulfilled ? "recovered" : "promised",
+        actionTaken: true,
+        actionCount,
+        playId,
+        promised: true,
+        promisedFulfilled: fulfilled,
+      };
+    }
+
+    const settled = settleAgainstGroundTruth(working, cause, playId, `${playId}-sim-${step}`);
+    if (settled) {
+      return {
+        leakType: seed.leakType,
+        exposureInr: seed.amountInr,
+        recoveredInr: seed.amountInr,
+        status: "recovered",
+        actionTaken: true,
+        actionCount,
+        playId,
+        promised,
+        promisedFulfilled: false,
+      };
+    }
+
+    bump(working, playId, nowIso);
+    if (playId !== "smart_retry") break;
+  }
 
   return {
     leakType: seed.leakType,
     exposureInr: seed.amountInr,
-    recoveredInr: settled ? seed.amountInr : 0,
-    status: settled ? "recovered" : "at_risk",
-    actionTaken: true,
-    playId: effectivePlay,
+    recoveredInr: 0,
+    status: "at_risk",
+    actionTaken: actionCount > 0,
+    actionCount,
+    playId: lastPlay,
+    promised,
+    promisedFulfilled: false,
   };
+}
+
+export function pickBaselinePlay(current: SeedCase, cause?: RootCause): PlayId {
+  const dx = cause
+    ? { rootCause: cause, label: cause, confidence: 0, evidence: [], narrative: "" }
+    : diagnose(current);
+  return baselineRecommendPlay(current, dx);
 }

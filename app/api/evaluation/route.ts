@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   const ws = await getWorkspace();
   const report = await runEvaluation({
     dataset: body.dataset ?? "synthetic",
-    syntheticCount: Math.min(2000, Math.max(100, body.syntheticCount ?? 800)),
+    syntheticCount: Math.min(5000, Math.max(100, body.syntheticCount ?? 2000)),
     policy: ws.policy,
   });
   return json(report);

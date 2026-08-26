@@ -2,6 +2,12 @@ import { CAUSE_LABEL, inr, LEAK_LABEL } from "../format";
 import type { Diagnosis, RootCause, SeedCase } from "../types";
 
 function causeFor(seed: SeedCase): RootCause {
+  if (seed.leakType === "mandate_failure") {
+    const code = seed.signals.declineCode ?? "";
+    if (code === "EXPIRED_CARD") return "expired_card";
+    if (code === "INSUFFICIENT_FUNDS") return "insufficient_funds";
+    return "mandate_revoked";
+  }
   if (seed.leakType === "payment_failure") {
     const code = seed.signals.declineCode ?? "";
     if (code === "EXPIRED_CARD") return "expired_card";

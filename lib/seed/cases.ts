@@ -62,12 +62,12 @@ const DRAFTS: Draft[] = [
 
   { name: "Sana Qureshi", city: "Delhi", leak: "failed_subscription", amount: 799, sub: "retry_exhausted", retry: 4 },
   { name: "Rahul Nair", city: "Kochi", leak: "failed_subscription", amount: 1499, sub: "expired_card", decline: "EXPIRED_CARD" },
-  { name: "Bhavya Shah", city: "Ahmedabad", leak: "failed_subscription", amount: 999, sub: "mandate_revoked", decline: "MANDATE_REVOKED" },
-  { name: "Tejas Kulkarni", city: "Pune", leak: "failed_subscription", amount: 1999, sub: "retry_exhausted", retry: 3 },
+  { name: "Bhavya Shah", city: "Ahmedabad", leak: "mandate_failure", amount: 999, sub: "mandate_revoked", decline: "MANDATE_REVOKED" },
+  { name: "Tejas Kulkarni", city: "Pune", leak: "mandate_failure", amount: 1999, decline: "INSUFFICIENT_FUNDS", retry: 1, lastContact: "2026-08-24T10:00:00+05:30" },
   { name: "Anika Bose", city: "Kolkata", leak: "failed_subscription", amount: 599, sub: "forgotten_renewal", lang: "hindi" },
   { name: "Manav Pillai", city: "Bengaluru", leak: "failed_subscription", amount: 2499, sub: "expired_card", decline: "EXPIRED_CARD" },
   { name: "Ritu Agarwal", city: "Lucknow", leak: "failed_subscription", amount: 1299, sub: "retry_exhausted", retry: 3, flags: ["complaint"] },
-  { name: "Sameer Khan", city: "Hyderabad", leak: "failed_subscription", amount: 899, sub: "mandate_revoked", decline: "MANDATE_REVOKED" },
+  { name: "Sameer Khan", city: "Hyderabad", leak: "mandate_failure", amount: 899, sub: "mandate_revoked", decline: "MANDATE_REVOKED" },
   { name: "Aditi Sharma", city: "Jaipur", leak: "failed_subscription", amount: 1699, sub: "forgotten_renewal" },
   { name: "Varun Chopra", city: "Gurugram", leak: "failed_subscription", amount: 2999, sub: "retry_exhausted", retry: 4, flags: ["chargeback"], lang: "english" },
 
@@ -95,6 +95,27 @@ function phone(index: number): string {
 }
 
 export function seedCaseFromDraft(draft: Draft, index: number): SeedCase {
+  const blocked = (draft.flags ?? []).some((f) =>
+    ["dnc", "complaint", "legal", "fraud", "chargeback"].includes(f),
+  );
+  const retries = draft.retry ?? 0;
+  const lifetime = draft.segment === "b2b" ? 18 + (index % 8) : 8 + (index % 10);
+  const rate = blocked
+    ? 0.28
+    : retries >= 3
+      ? 0.42
+      : retries >= 2
+        ? 0.58
+        : 0.78 + (index % 5) * 0.03;
+  const paymentSuccessRate = Math.min(0.97, rate);
+  const successfulPayments = Math.round(lifetime * paymentSuccessRate);
+  const failedPayments = Math.max(1, lifetime - successfulPayments);
+  const promiseFulfillmentRate = draft.invoice === "cashflow_delay" ? 0.72 : blocked ? 0.2 : 0.55;
+  const groundTruthPropensity = Math.min(
+    0.95,
+    Math.max(0.12, paymentSuccessRate * 0.82 + (blocked ? 0 : 0.08) - retries * 0.06),
+  );
+
   return {
     id: `NV-${1041 + index}`,
     customer: {
@@ -109,6 +130,7 @@ export function seedCaseFromDraft(draft: Draft, index: number): SeedCase {
     amountInr: draft.amount,
     occurredAt: occurredAt(index),
     merchantSegment: draft.segment ?? "d2c",
+    groundTruthPropensity,
     signals: {
       declineCode: draft.decline,
       dropReason: draft.drop,
@@ -117,10 +139,23 @@ export function seedCaseFromDraft(draft: Draft, index: number): SeedCase {
       cartItems: draft.cart,
       invoiceNo: draft.invoiceNo,
       daysPastDue: draft.dpd,
-      retryCount: draft.retry ?? 0,
+      retryCount: retries,
       contactsLast7Days: draft.contacts ?? 0,
       lastContactAt: draft.lastContact,
+      lastRetryAt: draft.lastContact,
       promiseToPayDate: draft.ptp,
+      paymentSuccessRate,
+      lifetimePayments: lifetime,
+      successfulPayments,
+      failedPayments,
+      avgPaymentInr: draft.amount,
+      priorRecoveries: retries >= 2 ? 1 : 0,
+      subscriptionAgeMonths:
+        draft.leak === "failed_subscription" || draft.leak === "mandate_failure" ? 4 + (index % 20) : 0,
+      previousAbandonments: draft.leak === "abandoned_checkout" ? 1 + (index % 3) : 0,
+      previousPromises: draft.ptp ? 1 : draft.segment === "b2b" ? index % 2 : 0,
+      promiseFulfillmentRate,
+      mandateRetryCount: draft.leak === "mandate_failure" ? retries : 0,
       flags: draft.flags ?? [],
     },
   };

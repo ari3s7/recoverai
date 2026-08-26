@@ -1,6 +1,12 @@
 import { inr } from "../format";
 import { policyNow } from "../policy/defaults";
-import type { PolicyConfig, PolicyVerdict, SeedCase } from "../types";
+import type { PlayId, PolicyConfig, PolicyVerdict, SeedCase } from "../types";
+import {
+  isMandateCase,
+  mandateCooldownActive,
+  mandateRetryCount,
+  recoveryWindowExpired,
+} from "./mandate";
 
 function hourInTz(date: Date, timeZone: string): number {
   const hour = new Intl.DateTimeFormat("en-GB", {
@@ -68,6 +74,14 @@ export function evaluatePolicy(seed: SeedCase, policy: PolicyConfig, at?: Date):
       };
     }
   }
+  if (recoveryWindowExpired(seed, policy, now)) {
+    return {
+      allowed: false,
+      action: "stop",
+      ruleId: "recovery-window",
+      reason: `Recovery window of ${seed.signals.recoveryWindowDays ?? policy.recoveryWindowDays} days has expired. Stop outbound.`,
+    };
+  }
   if (seed.signals.contactsLast7Days >= policy.maxContactsPer7Days) {
     return {
       allowed: false,
@@ -108,4 +122,32 @@ export function evaluatePolicy(seed: SeedCase, policy: PolicyConfig, at?: Date):
     action: "proceed",
     reason: "All stopping rules clear. Agent may execute a bounded play.",
   };
+}
+
+/**
+ * Play-level clamps. Case-level policy already ran; this stops unbounded retries
+ * without blocking an alternative (payment link) after retries are exhausted.
+ */
+export function clampPlayToPolicy(
+  playId: PlayId,
+  seed: SeedCase,
+  policy: PolicyConfig,
+  verdict: PolicyVerdict,
+  at: Date,
+): PlayId {
+  if (verdict.action === "stop") return "stop";
+  if (verdict.action === "hold") {
+    return verdict.ruleId === "promise-to-pay" ? "promise_to_pay" : "stop";
+  }
+  if (verdict.action === "escalate") return "human_escalate";
+
+  if (playId === "smart_retry") {
+    if (isMandateCase(seed)) {
+      if (mandateRetryCount(seed) >= policy.maxMandateRetries) return "payment_link";
+      if (mandateCooldownActive(seed, policy, at)) return "payment_link";
+    } else if (seed.signals.retryCount >= policy.maxRetries) {
+      return "payment_link";
+    }
+  }
+  return playId;
 }

@@ -24,6 +24,7 @@ function declineCode(p: RazorpayPayment): string {
 function leakType(p: RazorpayPayment): LeakType {
   const blob = `${p.method ?? ""} ${p.error_reason ?? ""}`.toLowerCase();
   if (blob.includes("emandate") || blob.includes("subscription")) return "failed_subscription";
+  if (blob.includes("mandate") || blob.includes("token")) return "mandate_failure";
   return "payment_failure";
 }
 
@@ -59,6 +60,10 @@ export function caseFromRazorpayPayment(p: RazorpayPayment, existingIds: string[
       retryCount: 0,
       contactsLast7Days: 0,
       razorpayPaymentId: p.id,
+      paymentSuccessRate: 0.6,
+      lifetimePayments: 4,
+      successfulPayments: 3,
+      failedPayments: 1,
       flags: [],
     },
     status: "at_risk",

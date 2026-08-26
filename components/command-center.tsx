@@ -12,6 +12,7 @@ const LEAK_FILTERS: Array<{ id: "all" | LeakType; label: string }> = [
   { id: "payment_failure", label: "Payments" },
   { id: "abandoned_checkout", label: "Checkout" },
   { id: "failed_subscription", label: "Subs" },
+  { id: "mandate_failure", label: "Mandates" },
   { id: "overdue_invoice", label: "Invoices" },
 ];
 
@@ -68,7 +69,7 @@ export function CommandCenter() {
     if (running) return;
     setRunning(true);
     setError(null);
-    setLiveLine("Detect → diagnose → policy → act");
+        setLiveLine("Detect → AI decide → policy → act");
     try {
       const res = await fetch("/api/batch/run", { method: "POST" });
       if (!res.ok) throw new Error("Batch failed to start");
@@ -153,7 +154,9 @@ export function CommandCenter() {
   }
 
   const t = view.totals;
-  const leakMix = (["payment_failure", "abandoned_checkout", "failed_subscription", "overdue_invoice"] as LeakType[]).map(
+  const leakMix = (
+    ["payment_failure", "abandoned_checkout", "failed_subscription", "mandate_failure", "overdue_invoice"] as LeakType[]
+  ).map(
     (id) => {
       const subset = view.cases.filter((c) => c.leakType === id);
       const amount = subset.reduce((s, c) => s + c.amountInr, 0);
@@ -205,7 +208,7 @@ export function CommandCenter() {
         <section className="rounded-lg border border-line bg-panel overflow-hidden">
           <div className="px-4 py-3 border-b border-line flex flex-wrap items-center gap-2">
             <div className="text-xs uppercase tracking-wide text-muted mr-2">Pipeline</div>
-            {["Detect", "Diagnose", "Policy", "Act", "Audit"].map((step, i) => (
+            {["Detect", "AI decide", "Policy", "Act", "Outcome"].map((step, i) => (
               <span
                 key={step}
                 className={`text-xs px-2 py-1 rounded ${running ? "text-gold border border-gold/30" : "text-muted border border-line"}`}
@@ -216,7 +219,7 @@ export function CommandCenter() {
             <span className="ml-auto text-xs text-muted">{liveLine}</span>
           </div>
 
-          <div className="px-4 py-3 border-b border-line grid sm:grid-cols-4 gap-3">
+          <div className="px-4 py-3 border-b border-line grid sm:grid-cols-5 gap-3">
             {leakMix.map((row) => (
               <button
                 key={row.id}

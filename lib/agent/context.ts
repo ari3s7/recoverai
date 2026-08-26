@@ -1,26 +1,30 @@
-import { sandboxUnit } from "../engine/execute";
 import type { CaseContext, RunCase, SeedCase } from "../types";
 
-function deriveHistory(seed: SeedCase) {
-  const roll = sandboxUnit(seed.id, "history");
-  const paymentSuccessRate =
-    seed.signals.paymentSuccessRate ??
-    Math.min(0.98, Math.max(0.35, 0.55 + roll * 0.4 - (seed.signals.retryCount ?? 0) * 0.06));
-  const lifetimePayments =
-    seed.signals.lifetimePayments ?? Math.round(4 + roll * 20 + paymentSuccessRate * 12);
-  const priorRecoveries = seed.signals.priorRecoveries ?? Math.floor(roll * 3);
+function observedHistory(seed: SeedCase) {
+  const lifetime = seed.signals.lifetimePayments ?? 6;
+  const rate = seed.signals.paymentSuccessRate ?? 0.62;
+  const successful = seed.signals.successfulPayments ?? Math.round(lifetime * rate);
+  const failed = seed.signals.failedPayments ?? Math.max(0, lifetime - successful);
   return {
-    paymentSuccessRate,
-    lifetimePayments,
-    priorRecoveries,
+    paymentSuccessRate: rate,
+    lifetimePayments: lifetime,
+    successfulPayments: successful,
+    failedPayments: failed,
+    avgPaymentInr: seed.signals.avgPaymentInr ?? seed.amountInr,
+    priorRecoveries: seed.signals.priorRecoveries ?? 0,
+    subscriptionAgeMonths: seed.signals.subscriptionAgeMonths ?? 0,
+    previousAbandonments: seed.signals.previousAbandonments ?? 0,
+    previousPromises: seed.signals.previousPromises ?? 0,
+    promiseFulfillmentRate: seed.signals.promiseFulfillmentRate ?? 0,
     contactsLast7Days: seed.signals.contactsLast7Days,
     retryCount: seed.signals.retryCount,
+    mandateRetryCount: seed.signals.mandateRetryCount ?? 0,
   };
 }
 
-/** Structured context the recovery agent reads before recommending. */
+/** Structured context the recovery agent reads before recommending. Never includes ground-truth propensity. */
 export function gatherCaseContext(seed: SeedCase): CaseContext {
-  const history = deriveHistory(seed);
+  const history = observedHistory(seed);
   const ctx: CaseContext = {
     caseId: seed.id,
     leakType: seed.leakType,
@@ -44,6 +48,7 @@ export function gatherCaseContext(seed: SeedCase): CaseContext {
     ctx.checkoutContext = [
       seed.signals.dropReason ?? "unknown_drop",
       seed.signals.cartItems?.length ? `cart=${seed.signals.cartItems.join("; ")}` : null,
+      `prior_abandons=${history.previousAbandonments}`,
     ]
       .filter(Boolean)
       .join(", ");
@@ -52,6 +57,7 @@ export function gatherCaseContext(seed: SeedCase): CaseContext {
     ctx.subscriptionContext = [
       seed.signals.subReason ?? "unknown_sub",
       seed.signals.declineCode ? `decline=${seed.signals.declineCode}` : null,
+      `age_months=${history.subscriptionAgeMonths}`,
     ]
       .filter(Boolean)
       .join(", ");
@@ -63,8 +69,17 @@ export function gatherCaseContext(seed: SeedCase): CaseContext {
       seed.signals.invoiceReason ?? "unknown",
     ].join(", ");
   }
+  if (seed.leakType === "mandate_failure" || seed.signals.declineCode === "MANDATE_REVOKED") {
+    ctx.mandateContext = [
+      seed.signals.declineCode ? `decline=${seed.signals.declineCode}` : "mandate_debit_failed",
+      `mandate_retries=${history.mandateRetryCount}`,
+      seed.signals.lastRetryAt ? `last_retry=${seed.signals.lastRetryAt}` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }
   if (seed.signals.promiseToPayDate) {
-    ctx.promiseContext = `active_ptp=${seed.signals.promiseToPayDate}`;
+    ctx.promiseContext = `active_ptp=${seed.signals.promiseToPayDate}; fulfillment_rate=${history.promiseFulfillmentRate}`;
   }
 
   return ctx;
@@ -72,4 +87,32 @@ export function gatherCaseContext(seed: SeedCase): CaseContext {
 
 export function getCaseContext(c: RunCase | SeedCase): CaseContext {
   return gatherCaseContext(c);
+}
+
+export function getCustomerHistory(c: SeedCase) {
+  return observedHistory(c);
+}
+
+export function getPaymentContext(c: SeedCase) {
+  return gatherCaseContext(c).paymentContext;
+}
+
+export function getCheckoutContext(c: SeedCase) {
+  return gatherCaseContext(c).checkoutContext;
+}
+
+export function getSubscriptionContext(c: SeedCase) {
+  return gatherCaseContext(c).subscriptionContext;
+}
+
+export function getInvoiceContext(c: SeedCase) {
+  return gatherCaseContext(c).invoiceContext;
+}
+
+export function getPromiseContext(c: SeedCase) {
+  return gatherCaseContext(c).promiseContext;
+}
+
+export function getMandateContext(c: SeedCase) {
+  return gatherCaseContext(c).mandateContext;
 }

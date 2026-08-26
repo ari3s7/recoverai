@@ -103,6 +103,12 @@ export function CaseDrawer({
             <p className="text-xs text-muted mt-1">
               {cse.merchantSegment.toUpperCase()} · occurred {ist(cse.occurredAt)}
             </p>
+            <p className="text-xs text-muted mt-2">
+              History: {cse.signals.successfulPayments ?? "—"}/{cse.signals.lifetimePayments ?? "—"} payments
+              succeeded
+              {cse.signals.retryCount ? ` · ${cse.signals.retryCount} retries` : ""}
+              {cse.signals.mandateRetryCount ? ` · mandate retry ${cse.signals.mandateRetryCount}` : ""}
+            </p>
           </section>
 
           {cse.agent ? (
@@ -131,6 +137,16 @@ export function CaseDrawer({
                     <li key={e}>· {e}</li>
                   ))}
                 </ul>
+              ) : null}
+              <p className="text-[10px] text-muted">Predicted recovery — not actual money</p>
+              {cse.agent.comparedPlays?.length ? (
+                <div className="text-[11px] text-muted space-y-0.5">
+                  {cse.agent.comparedPlays.map((row) => (
+                    <div key={row.play} className={row.play === cse.agent?.recommendedPlay ? "text-gold" : ""}>
+                      {PLAY_LABEL[row.play]} {Math.round(row.estimatedRecovery * 100)}%
+                    </div>
+                  ))}
+                </div>
               ) : null}
             </section>
           ) : null}

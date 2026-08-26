@@ -2,17 +2,8 @@ import { inr } from "../format";
 import { uid } from "../ids";
 import { createPaymentLink, razorpayConfigured } from "../razorpay/client";
 import type { ExecutionResult, Play, RootCause, SeedCase } from "../types";
-
-/** Deterministic 0..1 from case id — sandbox gateways must be replayable. */
-export function sandboxUnit(id: string, salt = ""): number {
-  let h = 2166136261;
-  const s = id + salt;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return ((h >>> 0) % 10_000) / 10_000;
-}
+import { settleAgainstGroundTruth } from "./groundTruth";
+export { sandboxUnit } from "./hash";
 
 const FIT: Record<RootCause, Partial<Record<Play["id"], number>>> = {
   insufficient_funds: { smart_retry: 0.52, hinglish_voice: 0.4, payment_link: 0.36 },
@@ -62,9 +53,7 @@ function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): Execution
     };
   }
 
-  const p = recoveryProbability(cause, play.id);
-  const roll = sandboxUnit(seed.id, play.id);
-  const recovered = roll < p;
+  const recovered = settleAgainstGroundTruth(seed, cause, play.id, `${play.id}-live`);
 
   if (play.id === "smart_retry") {
     return {

@@ -35,13 +35,19 @@ function plusDays(from: Date, days: number): string {
 function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
   const outbound = play.id === "smart_retry" || play.id === "payment_link" || play.id === "hinglish_voice";
   if (!outbound) return c;
+  const mandateRetry =
+    play.id === "smart_retry"
+      ? (c.signals.mandateRetryCount ?? c.signals.retryCount) + 1
+      : c.signals.mandateRetryCount;
   return {
     ...c,
     signals: {
       ...c.signals,
       contactsLast7Days: c.signals.contactsLast7Days + 1,
       lastContactAt: nowIso,
+      lastRetryAt: play.id === "smart_retry" ? nowIso : c.signals.lastRetryAt,
       retryCount: play.id === "smart_retry" ? c.signals.retryCount + 1 : c.signals.retryCount,
+      mandateRetryCount: play.id === "smart_retry" ? mandateRetry : c.signals.mandateRetryCount,
     },
   };
 }
@@ -54,13 +60,13 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
     stamp(current.id, "agent", "detect", `${current.leakType} · ${inr(current.amountInr)} at risk`),
   );
 
-  const { diagnosis, agent } = await recommendRecovery(current);
+  const { diagnosis, agent } = await recommendRecovery(current, { policy });
   timeline.push(
     stamp(
       current.id,
       "ai",
       "recommend",
-      `${agent.recommendedPlay} · est ${Math.round(agent.recoveryProbability * 100)}% recovery · ${agent.provider}`,
+      `${agent.recommendedPlay} · predicted ${Math.round(agent.recoveryProbability * 100)}% recovery · ${agent.provider}`,
     ),
   );
   timeline.push(
@@ -76,7 +82,7 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
   timeline.push(stamp(current.id, "policy", verdict.ruleId ?? verdict.action, verdict.reason));
 
   const ruleFallback = selectPlay(current, diagnosis, verdict);
-  const playId = resolvePlayAfterPolicy(agent, verdict, ruleFallback.id);
+  const playId = resolvePlayAfterPolicy(agent, verdict, ruleFallback.id, current, policy, now);
   const play = buildPlayForId(
     current,
     agent.rootCause,
@@ -173,8 +179,8 @@ export async function processCase(current: RunCase, policy: PolicyConfig, now: D
         execution.provider === "razorpay" ? "ingest" : "agent",
         "outcome.settled",
         execution.provider === "razorpay"
-          ? `Razorpay verified capture · ${inr(outcome.recoveredInr)}`
-          : `Sandbox simulation settled · ${inr(outcome.recoveredInr)} (not live money)`,
+          ? `Razorpay verified capture · ${inr(outcome.recoveredInr)} (AI predicted ${Math.round((current.agent ?? agent).recoveryProbability * 100)}%)`
+          : `Sandbox settlement · ${inr(outcome.recoveredInr)} · AI predicted ${Math.round(agent.recoveryProbability * 100)}% (prediction ≠ recovery)`,
         outcome.recoveredInr,
       ),
     );

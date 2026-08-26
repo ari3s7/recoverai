@@ -70,6 +70,26 @@ export default function PolicyPage() {
           value={policy.b2bEscalateDpd}
           onChange={(n) => setPolicy({ ...policy, b2bEscalateDpd: n })}
         />
+        <NumberField
+          label="Max payment retries"
+          value={policy.maxRetries}
+          onChange={(n) => setPolicy({ ...policy, maxRetries: n })}
+        />
+        <NumberField
+          label="Max mandate retries"
+          value={policy.maxMandateRetries}
+          onChange={(n) => setPolicy({ ...policy, maxMandateRetries: n })}
+        />
+        <NumberField
+          label="Recovery window (days)"
+          value={policy.recoveryWindowDays}
+          onChange={(n) => setPolicy({ ...policy, recoveryWindowDays: n })}
+        />
+        <NumberField
+          label="Mandate retry cooldown (hours)"
+          value={policy.mandateRetryCooldownHours}
+          onChange={(n) => setPolicy({ ...policy, mandateRetryCooldownHours: n })}
+        />
         <label className="text-sm">
           Sandbox clock (ISO)
           <input
@@ -105,6 +125,10 @@ export default function PolicyPage() {
         <p>Also always stop: DNC, complaint, legal, fraud, chargeback.</p>
         <p>Hold: active promise-to-pay, quiet hours.</p>
         <p>Escalate: amount ≥ {inr(policy.highAovInr)} or B2B DPD ≥ {policy.b2bEscalateDpd}.</p>
+        <p>
+          Mandate sequencer: max {policy.maxMandateRetries} retries, {policy.mandateRetryCooldownHours}h cooldown,
+          then payment-link re-auth. Recovery window {policy.recoveryWindowDays} days (D2C).
+        </p>
       </section>
     </div>
   );

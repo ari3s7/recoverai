@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { inr, LEAK_LABEL } from "@/lib/format";
 import type { EvaluationReport } from "@/lib/types";
 
@@ -8,7 +8,7 @@ export default function EvaluationPage() {
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [dataset, setDataset] = useState<"seed" | "synthetic">("synthetic");
-  const [count, setCount] = useState(800);
+  const [count, setCount] = useState(2000);
 
   const run = useCallback(async () => {
     setLoading(true);
@@ -24,10 +24,6 @@ export default function EvaluationPage() {
     }
   }, [dataset, count]);
 
-  useEffect(() => {
-    void run();
-  }, []);
-
   const b = report?.baseline;
   const a = report?.agent;
 
@@ -36,8 +32,9 @@ export default function EvaluationPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-gold">Recovery evaluation</h1>
         <p className="text-sm text-muted mt-1">
-          Baseline (naive payment-link strategy) vs RecoverAI agent (context + scored play selection).
-          Numbers come from the same simulation engine — not marketing copy.
+          Baseline (blind retry / generic reminder) vs RecoverAI (scored play selection + mandate sequencer).
+          Numbers are calculated from the same ground-truth simulator — not marketing copy.
+          AI predicted probability is not counted as recovered revenue.
         </p>
       </div>
 
@@ -59,7 +56,7 @@ export default function EvaluationPage() {
             <input
               type="number"
               min={100}
-              max={2000}
+              max={5000}
               value={count}
               onChange={(e) => setCount(Number(e.target.value))}
               className="mt-1 block w-28 bg-panel border border-line rounded px-2 py-1.5"
@@ -105,6 +102,8 @@ export default function EvaluationPage() {
                 <Row label="Actions / recovery" b={b.actionsPerRecovery.toFixed(2)} a={a.actionsPerRecovery.toFixed(2)} />
                 <Row label="Stopped" b={String(b.stoppedCount)} a={String(a.stoppedCount)} />
                 <Row label="Escalated" b={String(b.escalatedCount)} a={String(a.escalatedCount)} />
+                <Row label="Promises created" b={String(b.promisedCount)} a={String(a.promisedCount)} />
+                <Row label="Promises fulfilled" b={String(b.promisedFulfilledCount)} a={String(a.promisedFulfilledCount)} />
               </tbody>
             </table>
           </div>
@@ -126,13 +125,18 @@ export default function EvaluationPage() {
           </section>
 
           <p className="text-xs text-muted">
-            Ran {report.caseCount} {report.dataset} cases at {new Date(report.ranAt).toLocaleString("en-IN")}. Sandbox
-            settlement uses the same probability model; Razorpay captures are verified separately via webhook.
+            Ran {report.caseCount} {report.dataset} cases at {new Date(report.ranAt).toLocaleString("en-IN")}.
+            Settlement uses a hidden ground-truth model; the AI never sees it. Razorpay captures are verified
+            separately via webhook.
           </p>
         </>
       ) : loading ? (
-        <p className="text-sm text-muted">Computing baseline vs agent…</p>
-      ) : null}
+        <p className="text-sm text-muted">Computing baseline vs RecoverAI…</p>
+      ) : (
+        <p className="text-sm text-muted">
+          Choose a dataset and run the experiment. Metrics are calculated live — nothing is hardcoded.
+        </p>
+      )}
     </div>
   );
 }

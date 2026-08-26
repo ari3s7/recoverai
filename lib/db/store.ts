@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { computeTotals } from "../engine/totals";
 import { uid } from "../ids";
-import { DEFAULT_POLICY } from "../policy/defaults";
+import { DEFAULT_POLICY, normalizePolicy } from "../policy/defaults";
 import { MERCHANT, SEED_CASES } from "../seed/cases";
 import type { AuditEvent, PolicyConfig, RunCase, Workspace } from "../types";
 
@@ -45,7 +45,10 @@ async function readFile(): Promise<Workspace> {
     const raw = await fs.readFile(FILE, "utf8");
     const parsed = JSON.parse(raw) as Workspace;
     if (!parsed?.cases?.length) return emptyWorkspace();
-    return parsed;
+    return {
+      ...parsed,
+      policy: normalizePolicy(parsed.policy),
+    };
   } catch {
     return emptyWorkspace();
   }
