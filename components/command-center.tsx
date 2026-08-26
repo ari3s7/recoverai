@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { inr, LEAK_LABEL } from "@/lib/format";
 import type { CaseActionRequest, CaseStatus, LeakType, RunCase } from "@/lib/types";
+import { auditHeadline } from "./audit-copy";
 import { CaseDrawer } from "./case-drawer";
 import { CaseTable } from "./case-table";
 import { loadWorkspace, mergeCase, readSse, type WorkspaceView } from "./workspace";
@@ -170,7 +171,8 @@ export function CommandCenter() {
     (id) => {
       const subset = view.cases.filter((c) => c.leakType === id);
       const amount = subset.reduce((s, c) => s + c.amountInr, 0);
-      return { id, amount, count: subset.length };
+      const recovered = subset.reduce((s, c) => s + (c.outcome?.recoveredInr ?? 0), 0);
+      return { id, amount, recovered, count: subset.length };
     },
   );
   const maxMix = Math.max(...leakMix.map((x) => x.amount), 1);
@@ -183,9 +185,9 @@ export function CommandCenter() {
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Command center</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">RecoverAI Command Center</h1>
           <p className="text-sm text-muted mt-1">
-            Detect revenue at risk, apply the RecoverAI recovery policy, bound it with merchant guardrails, execute, measure rupees recovered.
+            Autonomous revenue recovery, bounded by merchant policy.
           </p>
         </div>
         <div className="flex gap-2">
@@ -205,10 +207,10 @@ export function CommandCenter() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
+        <Kpi label="Recovered" value={inr(t.recoveredInr)} gold hero />
         <Kpi label="Exposure" value={inr(t.exposureInr)} />
-        <Kpi label="Recovered" value={inr(t.recoveredInr)} gold />
-        <Kpi label="Recovery rate" value={`${Math.round(t.recoveryRate * 100)}%`} gold />
+        <Kpi label="Recovery rate" value={`${Math.round(t.recoveryRate * 100)}%`} />
         <Kpi label="Promised" value={inr(t.promisedInr)} />
         <Kpi label="Stopped" value={String(t.stoppedCount)} />
         <Kpi label="Escalated" value={String(t.escalatedCount)} />
@@ -237,7 +239,8 @@ export function CommandCenter() {
                 className="text-left"
               >
                 <div className="text-[11px] uppercase tracking-wide text-muted">{LEAK_LABEL[row.id]}</div>
-                <div className="text-sm tabular mt-1">{inr(row.amount)}</div>
+                <div className="text-xs text-muted mt-1">At risk {inr(row.amount)}</div>
+                <div className="text-sm tabular mt-0.5 text-gold">Recovered {inr(row.recovered)}</div>
                 <div className="h-1 bg-white/5 mt-2 rounded">
                   <div className="h-1 rounded bg-gold/70" style={{ width: `${(row.amount / maxMix) * 100}%` }} />
                 </div>
@@ -285,9 +288,9 @@ export function CommandCenter() {
                     onClick={() => ev.caseId !== "SYSTEM" && setSelectedId(ev.caseId)}
                   >
                     <div className="font-mono text-[10px] text-gold-dim">
-                      {ev.caseId} · {ev.actor} · {ev.action}
+                      {ev.caseId} · {auditHeadline(ev.actor, ev.action)}
                     </div>
-                    <div className="text-xs text-muted mt-0.5">{ev.reason}</div>
+                    <div className="text-xs text-muted mt-0.5 whitespace-pre-wrap">{ev.reason}</div>
                   </button>
                 </li>
               ))}
@@ -379,11 +382,27 @@ export function CommandCenter() {
   );
 }
 
-function Kpi({ label, value, gold }: { label: string; value: string; gold?: boolean }) {
+function Kpi({
+  label,
+  value,
+  gold,
+  hero,
+}: {
+  label: string;
+  value: string;
+  gold?: boolean;
+  hero?: boolean;
+}) {
   return (
-    <div className="rounded-lg border border-line bg-panel px-4 py-3">
+    <div
+      className={`rounded-lg border bg-panel px-4 py-3 ${
+        hero ? "col-span-2 border-gold/40 glow" : "border-line"
+      }`}
+    >
       <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
-      <div className={`mt-1 text-xl tabular ${gold ? "text-gold" : ""}`}>{value}</div>
+      <div className={`mt-1 tabular ${hero ? "text-3xl font-semibold text-gold" : gold ? "text-xl text-gold" : "text-xl"}`}>
+        {value}
+      </div>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { inr, CAUSE_LABEL } from "../format";
+import { inr, PLAY_LABEL } from "../format";
 import { uid } from "../ids";
 import { recommendRecovery } from "../agent/recommend";
 import { resolvePlayAfterPolicy } from "../agent/validate";
@@ -88,7 +88,7 @@ export async function processCase(
   const timeline: AuditEvent[] = [];
 
   timeline.push(
-    stamp(current.id, "agent", "detect", `${current.leakType} · ${inr(current.amountInr)} at risk`),
+    stamp(current.id, "agent", "DETECT", `${inr(current.amountInr)} at risk`),
   );
 
   if (isBreachedPromise(current, now)) {
@@ -107,13 +107,13 @@ export async function processCase(
     forceHeuristic: !opts?.useLiveLlm,
     utterance: opts?.utterance,
   });
-  const decisionLabel = agent.provider === "heuristic" ? "RecoverAI recovery policy" : "Live AI agent";
+  const predictedPct = Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100);
   timeline.push(
     stamp(
       current.id,
       "ai",
       "AI_DECISION",
-      `${decisionLabel}: ${agent.recommendedPlay} · predicted ${Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100)}% · ${agent.provider} · ${CAUSE_LABEL[agent.rootCause]} (${agent.confidence}% confidence) · ${agent.reasoning.slice(0, 3).join("; ")}`,
+      `Recommended ${PLAY_LABEL[agent.recommendedPlay]}. Predicted recovery ${predictedPct}%. Confidence ${agent.confidence}%.`,
     ),
   );
 
@@ -123,7 +123,7 @@ export async function processCase(
       current.id,
       "policy",
       "POLICY_DECISION",
-      `${verdict.action}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""}: ${verdict.reason}`,
+      `${verdict.action.toUpperCase()}${verdict.ruleId ? ` · ${verdict.ruleId}` : ""}. Reason: ${verdict.reason}`,
     ),
   );
 
@@ -157,14 +157,34 @@ export async function processCase(
     timeline.push(stamp(current.id, "policy", auth.auditAction, auth.reason));
   } else {
     execution = await executePlay(current, play, agent.rootCause);
-    timeline.push(
-      stamp(
-        current.id,
-        execution.provider === "operator" ? "human" : "agent",
-        "ACTION_EXECUTED",
-        execution.message,
-      ),
-    );
+    if (play.id === "stop") {
+      timeline.push(
+        stamp(
+          current.id,
+          "policy",
+          "ACTION_BLOCKED",
+          `No outbound action executed. ${execution.message}`,
+        ),
+      );
+    } else if (play.id === "human_escalate") {
+      timeline.push(
+        stamp(
+          current.id,
+          "policy",
+          "ACTION_ESCALATED",
+          `Recovery action not executed. Human review required. ${execution.message}`,
+        ),
+      );
+    } else {
+      timeline.push(
+        stamp(
+          current.id,
+          execution.provider === "operator" ? "human" : "agent",
+          "ACTION_EXECUTED",
+          execution.message,
+        ),
+      );
+    }
   }
 
   let status: CaseStatus = "at_risk";

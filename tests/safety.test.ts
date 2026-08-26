@@ -25,6 +25,7 @@ test("policy STOP (DNC) prevents execution and outbound contact", async () => {
   assert.equal(next.paymentLinkUrl, undefined);
   assert.equal(next.signals.contactsLast7Days, contacts);
   assert.ok(next.timeline.some((e) => e.action === "ACTION_BLOCKED"));
+  assert.ok(next.timeline.some((e) => e.action === "ACTION_BLOCKED" && e.reason.startsWith("No outbound action executed.")));
   assert.ok(!next.timeline.some((e) => e.action === "ACTION_EXECUTED"));
 });
 
@@ -90,6 +91,11 @@ test("policy ESCALATE (high-AOV B2B) prevents AI play execution", async () => {
   assert.equal(next.paymentLinkUrl, undefined);
   assert.ok(next.agent);
   assert.ok(next.timeline.some((e) => e.action === "ACTION_ESCALATED"));
+  assert.ok(
+    next.timeline.some(
+      (e) => e.action === "ACTION_ESCALATED" && e.reason.includes("Human review required"),
+    ),
+  );
   assert.ok(!next.timeline.some((e) => e.action === "ACTION_EXECUTED"));
 });
 
@@ -104,6 +110,11 @@ test("autoExecute=false prevents execution and queues the case", async () => {
   assert.equal(next.paymentLinkUrl, undefined);
   assert.equal(next.signals.contactsLast7Days, before.signals.contactsLast7Days);
   assert.ok(next.timeline.some((e) => e.action === "ACTION_QUEUED"));
+  assert.ok(
+    next.timeline.some(
+      (e) => e.action === "ACTION_QUEUED" && e.reason.includes("Nothing executed"),
+    ),
+  );
   assert.ok(next.agent);
 });
 

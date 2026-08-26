@@ -1,6 +1,6 @@
 "use client";
 
-import { inr, ist, LEAK_LABEL } from "@/lib/format";
+import { inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
 import type { RunCase } from "@/lib/types";
 import { StatusPill } from "./status-pill";
 
@@ -31,7 +31,7 @@ export function CaseTable({
             <th className="px-3 py-2 font-medium">Leak</th>
             <th className="px-3 py-2 font-medium text-right">Amount</th>
             <th className="px-3 py-2 font-medium">Cause</th>
-            <th className="px-3 py-2 font-medium">Play</th>
+            <th className="px-3 py-2 font-medium">AI Play</th>
             <th className="px-3 py-2 font-medium">Status</th>
             <th className="px-3 py-2 font-medium">Updated</th>
           </tr>
@@ -56,7 +56,9 @@ export function CaseTable({
               <td className="px-3 py-2 text-muted">{LEAK_LABEL[c.leakType]}</td>
               <td className="px-3 py-2 text-right tabular">{inr(c.amountInr)}</td>
               <td className="px-3 py-2 text-muted">{c.diagnosis?.label ?? "—"}</td>
-              <td className="px-3 py-2 text-muted">{c.play?.label ?? "—"}</td>
+              <td className="px-3 py-2 text-muted">
+                {c.agent ? PLAY_LABEL[c.agent.recommendedPlay] : (c.play?.label ?? "—")}
+              </td>
               <td className="px-3 py-2">
                 <StatusPill status={c.status} />
               </td>

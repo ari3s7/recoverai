@@ -27,7 +27,7 @@ export function authorizeExecution(
       execute: false,
       executionStatus: "blocked",
       auditAction: "ACTION_BLOCKED",
-      reason: verdict.reason,
+      reason: `No outbound action executed. ${verdict.reason}`,
     };
   }
   if (verdict.action === "hold") {
@@ -35,7 +35,7 @@ export function authorizeExecution(
       execute: false,
       executionStatus: "held",
       auditAction: "ACTION_HELD",
-      reason: verdict.reason,
+      reason: `No outbound action executed. ${verdict.reason}`,
     };
   }
   if (verdict.action === "escalate") {
@@ -43,7 +43,7 @@ export function authorizeExecution(
       execute: false,
       executionStatus: "escalated",
       auditAction: "ACTION_ESCALATED",
-      reason: verdict.reason,
+      reason: `Recovery action not executed. Human review required. ${verdict.reason}`,
     };
   }
   if (!policy.autoExecute && playId !== "stop") {
@@ -51,7 +51,7 @@ export function authorizeExecution(
       execute: false,
       executionStatus: "queued",
       auditAction: "ACTION_QUEUED",
-      reason: "Auto-execute is off. Recommendation recorded; awaiting operator approval. No outbound action.",
+      reason: "Action queued for operator approval. Nothing executed.",
     };
   }
   return {

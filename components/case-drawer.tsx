@@ -5,6 +5,7 @@ import { CAUSE_LABEL, inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
 import { describeMandateSequence, isMandateCase } from "@/lib/engine/mandate";
 import { DEFAULT_POLICY } from "@/lib/policy/defaults";
 import type { CaseActionRequest, RunCase } from "@/lib/types";
+import { auditHeadline } from "./audit-copy";
 import { StatusPill } from "./status-pill";
 
 function speakHinglish(text: string) {
@@ -116,6 +117,12 @@ export function CaseDrawer({
             <p className="text-xs text-muted mt-1">
               {cse.merchantSegment.toUpperCase()} · occurred {ist(cse.occurredAt)}
             </p>
+            {cse.diagnosis ? (
+              <p className="text-xs text-muted mt-2 leading-relaxed">
+                {cse.diagnosis.label}
+                {narrative ? ` · ${narrative}` : ""}
+              </p>
+            ) : null}
           </section>
 
           <section className="rounded-lg border border-line p-3 space-y-1">
@@ -166,25 +173,13 @@ export function CaseDrawer({
 
           {cse.agent ? (
             <section className="rounded-lg border border-gold/30 bg-gold/5 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <Label>
-                  {cse.agent.provider === "heuristic" ? "AI decision (RecoverAI policy)" : "AI decision (live LLM)"}
-                </Label>
-                <span className="text-[10px] uppercase tracking-wide text-muted">{cse.agent.provider}</span>
-              </div>
+              <Label>AI recommendation</Label>
               <p className="font-medium text-gold">{PLAY_LABEL[cse.agent.recommendedPlay]}</p>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <span className="text-muted">Predicted recovery</span>
-                  <p className="tabular font-medium">
-                    {Math.round((cse.agent.aiPredictedRecoveryProbability ?? cse.agent.recoveryProbability) * 100)}%
-                  </p>
-                </div>
-                <div>
-                  <span className="text-muted">Confidence</span>
-                  <p className="tabular font-medium">{cse.agent.confidence}%</p>
-                </div>
-              </div>
+              <p className="tabular text-sm">
+                {Math.round((cse.agent.aiPredictedRecoveryProbability ?? cse.agent.recoveryProbability) * 100)}%
+                predicted recovery
+                <span className="text-muted"> · {cse.agent.confidence}% confidence</span>
+              </p>
               <p className="text-xs text-muted">Root cause: {CAUSE_LABEL[cse.agent.rootCause]}</p>
               {cse.agent.reasoning.length ? (
                 <ul className="space-y-1 text-xs text-muted">
@@ -193,36 +188,8 @@ export function CaseDrawer({
                   ))}
                 </ul>
               ) : null}
-              <p className="text-[10px] text-muted">
-                AI recommendation ≠ action executed ≠ recovered revenue
-              </p>
-              {cse.agent.comparedPlays?.length ? (
-                <div className="text-[11px] text-muted space-y-0.5">
-                  {cse.agent.comparedPlays.map((row) => (
-                    <div key={row.play} className={row.play === cse.agent?.recommendedPlay ? "text-gold" : ""}>
-                      {PLAY_LABEL[row.play]} {Math.round(row.estimatedRecovery * 100)}%
-                    </div>
-                  ))}
-                </div>
-              ) : null}
             </section>
           ) : null}
-
-          <section>
-            <Label>Diagnosis</Label>
-            <p className="font-medium">
-              {cse.diagnosis?.label ?? "Not run"}
-              {cse.diagnosis ? ` · ${cse.diagnosis.confidence}%` : ""}
-            </p>
-            <p className="text-muted mt-2 leading-relaxed">{narrative || "Run the agent to diagnose root cause."}</p>
-            {cse.diagnosis?.evidence?.length ? (
-              <ul className="mt-3 space-y-1 text-xs text-muted">
-                {cse.diagnosis.evidence.map((e) => (
-                  <li key={e}>· {e}</li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
 
           <section>
             <Label>Policy</Label>
@@ -233,36 +200,29 @@ export function CaseDrawer({
               {cse.policy?.ruleId ? ` · ${cse.policy.ruleId}` : ""}
             </p>
             <p className="text-muted mt-1">{cse.policy?.reason ?? "Stopping rules have not been evaluated yet."}</p>
-            {cse.agent && cse.play && cse.agent.recommendedPlay !== cse.play.id ? (
-              <p className="text-xs text-danger mt-2">
-                AI recommended {PLAY_LABEL[cse.agent.recommendedPlay]}. Policy {cse.policy?.action}:{" "}
-                {PLAY_LABEL[cse.play.id]}.
-              </p>
-            ) : null}
           </section>
 
           <section>
             <Label>Execution</Label>
-            <p className="font-medium">
-              {cse.executionStatus === "executed"
-                ? "EXECUTED"
-                : cse.executionStatus
-                  ? `NOT EXECUTED · ${cse.executionStatus}`
-                  : cse.play
-                    ? PLAY_LABEL[cse.play.id]
-                    : "—"}
-            </p>
-            <p className="text-muted mt-1">{cse.execution?.message ?? cse.play?.reason}</p>
-            {cse.play ? (
-              <p className="text-xs text-muted mt-1">Authorized play: {PLAY_LABEL[cse.play.id]}</p>
-            ) : null}
-            {cse.execution ? (
-              <p className="mt-2 font-mono text-[11px] text-gold-dim">
-                {cse.execution.provider} · {cse.execution.referenceId}
-                <br />
-                {cse.execution.message}
-              </p>
-            ) : null}
+            {cse.executionStatus === "executed" ? (
+              <>
+                <p className="font-medium text-ok">
+                  {cse.play?.id === "payment_link" || cse.execution?.paymentLinkUrl
+                    ? "Payment Link created"
+                    : cse.play
+                      ? `${PLAY_LABEL[cse.play.id]} executed`
+                      : "EXECUTED"}
+                </p>
+                <p className="text-muted mt-1">{cse.execution?.message}</p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-danger">NOT EXECUTED</p>
+                <p className="text-muted mt-1">
+                  {cse.policy?.reason ?? cse.execution?.message ?? "Not yet run."}
+                </p>
+              </>
+            )}
             {cse.paymentLinkUrl || cse.execution?.paymentLinkUrl ? (
               <p className="mt-2">
                 <a
@@ -280,29 +240,26 @@ export function CaseDrawer({
             ) : null}
           </section>
 
-          {cse.outcome ? (
-            <section className="rounded-lg border border-line p-3">
-              <Label>Payment outcome</Label>
-              <p className="font-medium">
-                {cse.outcome.recoveredInr > 0
-                  ? `Recovered ${inr(cse.outcome.recoveredInr)}`
-                  : cse.outcome.status === "promised"
+          <section className="rounded-lg border border-line p-3 space-y-1">
+            <Label>Outcome</Label>
+            <p className="font-medium">
+              {cse.outcome?.recoveredInr
+                ? cse.execution?.provider === "razorpay"
+                  ? "Payment captured"
+                  : "Recovered"
+                : cse.outcome
+                  ? cse.outcome.status === "promised"
                     ? `Promised ${inr(cse.outcome.promisedInr)}`
-                    : cse.outcome.status.replace("_", " ")}
-              </p>
-              <p className="text-muted mt-1 text-xs">{cse.outcome.note}</p>
-              {cse.execution?.settled === false && cse.execution.paymentLinkUrl ? (
-                <p className="text-[10px] text-muted mt-2">Action executed; settlement pending.</p>
-              ) : null}
-              {cse.execution?.settled ? (
-                <p className="text-[10px] text-ok mt-2">
-                  {cse.execution.provider === "razorpay"
-                    ? "Razorpay verified capture"
-                    : "Sandbox simulation settled (demo — not live money)"}
-                </p>
-              ) : null}
-            </section>
-          ) : null}
+                    : cse.outcome.status.replace("_", " ")
+                  : "—"}
+            </p>
+            {cse.outcome?.note ? <p className="text-muted text-xs">{cse.outcome.note}</p> : null}
+          </section>
+
+          <section className="rounded-lg border border-gold/30 bg-gold/5 p-3">
+            <Label>Recovered</Label>
+            <p className="text-2xl tabular text-gold font-semibold">{inr(cse.outcome?.recoveredInr ?? 0)}</p>
+          </section>
 
           {script ? (
             <section>
@@ -408,10 +365,10 @@ export function CaseDrawer({
               {[...cse.timeline].reverse().map((ev) => (
                 <li key={ev.id} className="border-l border-line pl-3">
                   <div className="font-mono text-[10px] text-muted">
-                    {ist(ev.ts)} · {ev.actor} · {ev.action}
+                    {ist(ev.ts)} · {auditHeadline(ev.actor, ev.action)}
                     {ev.moneyDeltaInr ? ` · +${inr(ev.moneyDeltaInr)}` : ""}
                   </div>
-                  <div className="text-xs text-foreground/80">{ev.reason}</div>
+                  <div className="text-xs text-foreground/80 whitespace-pre-wrap">{ev.reason}</div>
                 </li>
               ))}
             </ol>
