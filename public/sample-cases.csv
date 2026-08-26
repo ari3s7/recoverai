@@ -1,0 +1,4 @@
+id,name,city,company,leakType,amountInr,declineCode,flags,language,segment,dpd,invoiceNo
+,Ira Sen,Pune,,payment_failure,2199,INSUFFICIENT_FUNDS,,hinglish,d2c,,
+,Kabir Dutt,Delhi,,abandoned_checkout,3499,,,hinglish,d2c,,
+NV-EXT-1,Mehul Shah,Ahmedabad,Shah Distributors,overdue_invoice,15400,,,english,b2b,21,INV-9100

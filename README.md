@@ -1,36 +1,81 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# RecoverAI
 
-## Getting Started
+Operator desk for **AI Revenue Recovery** (Track 03). It takes a batch of leaked revenue — failed payments, abandoned checkouts, lapsed subscriptions, overdue invoices — diagnoses each case, applies stopping rules, executes a bounded play, and reports **rupees recovered**.
 
-First, run the development server:
+No Postgres. No Stripe. No Twilio. State lives in `data/store.json`. Payments and voice run through a replayable **sandbox adapter** so the desk is always demoable and still structured like production.
+
+## Run
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Optional LLM polish (diagnosis copy and Hinglish scripts). The batch never waits on it:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.example .env.local
+# set OPENAI_API_KEY or GEMINI_API_KEY
+```
 
-## Learn More
+## 90-second demo
 
-To learn more about Next.js, take a look at the following resources:
+1. **Command** — exposure across 48 Nivaara cases.
+2. Click **Run recovery batch**. Watch detect → diagnose → policy → act. Recovered INR counts up. Audit streams on the right.
+3. Open a **Stopped** case (`NV-1048` Kabir Singh — complaint, or `NV-1054` Farhan Ali — DNC). Policy fired. No outbound.
+4. Open a **Hinglish voice** recovery (`NV-1060` Nikhil Bansal, price shock). Click **Speak**.
+5. Open **Queue** for high-AOV / 60+ DPD B2B that must not be auto-called (`NV-1079` Neel Logistics).
+6. Open **Promises** for dated holds (`NV-1083` Saffron Traders).
+7. Open **Audit** — recovered vs stopped vs escalated. Export JSON/CSV.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Say on camera: *it does not just flag leakage. It recovers a measured number across a batch, under stopping rules, with an audit trail.*
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Product surface
 
-## Deploy on Vercel
+| Route | What it is |
+| --- | --- |
+| `/` | Command center, batch runner, ingest |
+| `/queue` | Human escalation queue |
+| `/promises` | Promise-to-pay tracker |
+| `/audit` | Filterable audit trail + export |
+| `/policy` | Editable stopping rules |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Pipeline
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Detect → Diagnose → Policy gate → Select play → Sandbox execute → Outcome → Audit.
+
+**Stops:** DNC, complaint, legal, fraud/chargeback, contact cap (default 3 / 7 days).
+
+**Holds:** quiet hours IST (21:00–09:00), active promise-to-pay.
+
+**Escalates:** amount ≥ ₹25,000 or B2B DPD ≥ 60. No auto voice.
+
+**Plays:** smart retry, payment link, Hinglish voice, promise-to-pay, human escalate, stop.
+
+## APIs
+
+- `GET /api/workspace` — full desk snapshot
+- `POST /api/batch/run` — SSE case-by-case run
+- `POST /api/cases/:id/actions` — `run` \| `stop` \| `escalate` \| `mark_recovered` \| `capture_promise` \| `release_hold`
+- `PUT /api/policy` — stopping rules
+- `POST /api/ingest/webhook` — live leak event
+- `POST /api/ingest/csv` — bulk import (`public/sample-cases.csv`)
+- `POST /api/workspace/reset` — restore the 48-case seed
+- `GET /api/health`
+
+Webhook example:
+
+```json
+{
+  "type": "payment.failed",
+  "amountInr": 2199,
+  "customer": { "name": "Ira Sen", "city": "Pune" },
+  "declineCode": "INSUFFICIENT_FUNDS"
+}
+```
+
+## Stack
+
+Next.js (App Router) · TypeScript · Tailwind · file-backed workspace · optional OpenAI/Gemini · Web Speech API for Hinglish playback in Chrome.
