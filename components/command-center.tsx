@@ -185,7 +185,7 @@ export function CommandCenter() {
           <button
             onClick={runBatch}
             disabled={running}
-            className="rounded-md bg-gold text-background px-4 py-2 text-sm font-medium disabled:opacity-50"
+            className="glow rounded-md bg-gold text-background px-4 py-2 text-sm font-medium disabled:opacity-50"
           >
             {running ? "Running batch…" : "Run recovery batch"}
           </button>
@@ -313,6 +313,44 @@ export function CommandCenter() {
               </a>
             </div>
             {ingestMsg ? <p className="text-xs text-ok">{ingestMsg}</p> : null}
+          </section>
+
+          <section className="rounded-lg border border-line bg-panel p-4 space-y-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted">Razorpay</div>
+            {view.razorpay?.configured ? (
+              <>
+                <p className="text-xs text-gold">
+                  Connected · {view.razorpay.mode} mode
+                  {view.razorpay.webhookConfigured ? " · webhook verified" : " · add webhook secret for capture"}
+                </p>
+                <p className="text-xs text-muted">
+                  Sync pulls failed payments. Recovery plays issue a live payment link. Captured webhooks mark the case recovered.
+                </p>
+                <button
+                  onClick={async () => {
+                    setIngestMsg(null);
+                    const res = await fetch("/api/razorpay/sync", { method: "POST" });
+                    const data = (await res.json()) as WorkspaceView & { error?: string; imported?: number };
+                    if (!res.ok) {
+                      setIngestMsg(data.error ?? "Razorpay sync failed");
+                      return;
+                    }
+                    setView(data);
+                    setIngestMsg(`Synced Razorpay failed payments`);
+                  }}
+                  className="text-xs border border-gold/40 text-gold rounded px-2 py-1 hover:bg-gold/10"
+                >
+                  Sync failed payments
+                </button>
+              </>
+            ) : (
+              <p className="text-xs text-muted">
+                Sandbox is on. Set <span className="font-mono text-gold-dim">RAZORPAY_KEY_ID</span> and{" "}
+                <span className="font-mono text-gold-dim">RAZORPAY_KEY_SECRET</span> in{" "}
+                <span className="font-mono">.env.local</span> to issue real INR payment links. Webhook:{" "}
+                <span className="font-mono text-gold-dim">/api/webhooks/razorpay</span>
+              </p>
+            )}
           </section>
         </aside>
       </div>

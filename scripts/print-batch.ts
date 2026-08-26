@@ -1,3 +1,4 @@
+import type { RunCase } from "../lib/types";
 import { processCase } from "../lib/engine/process";
 import { isBatchEligible } from "../lib/engine/runBatch";
 import { computeTotals } from "../lib/engine/totals";
@@ -6,9 +7,10 @@ import { policyNow } from "../lib/policy/defaults";
 
 const ws = emptyWorkspace();
 const now = policyNow(ws.policy);
-const next = ws.cases.map((c) =>
-  isBatchEligible(c) ? processCase({ ...c, status: "in_flight" }, ws.policy, now) : c,
-);
+const next: RunCase[] = [];
+for (const c of ws.cases) {
+  next.push(isBatchEligible(c) ? await processCase({ ...c, status: "in_flight" }, ws.policy, now) : c);
+}
 const t = computeTotals(next);
 const counts = next.reduce<Record<string, number>>((acc, c) => {
   acc[c.status] = (acc[c.status] ?? 0) + 1;

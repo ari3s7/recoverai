@@ -132,6 +132,18 @@ export function CaseDrawer({
                 {cse.execution.message}
               </p>
             ) : null}
+            {cse.paymentLinkUrl || cse.execution?.paymentLinkUrl ? (
+              <p className="mt-2">
+                <a
+                  href={cse.paymentLinkUrl ?? cse.execution?.paymentLinkUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-gold hover:underline"
+                >
+                  Open Razorpay payment link
+                </a>
+              </p>
+            ) : null}
           </section>
 
           {script ? (

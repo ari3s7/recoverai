@@ -54,6 +54,8 @@ export type Customer = {
   phoneMasked: string;
   channelPref: ChannelPref;
   company?: string;
+  email?: string;
+  contact?: string;
 };
 
 export type CaseSignals = {
@@ -72,6 +74,8 @@ export type CaseSignals = {
   contactsLast7Days: number;
   lastContactAt?: string;
   promiseToPayDate?: string;
+  razorpayPaymentId?: string;
+  razorpayPaymentLinkId?: string;
   flags: Flag[];
 };
 
@@ -120,9 +124,12 @@ export type Outcome = {
 
 export type ExecutionResult = {
   ok: boolean;
-  provider: "sandbox.payments" | "sandbox.comms" | "sandbox.voice" | "policy" | "operator";
+  /** True only when money actually moved (sandbox conversion or Razorpay capture). */
+  settled?: boolean;
+  provider: "sandbox.payments" | "sandbox.comms" | "sandbox.voice" | "policy" | "operator" | "razorpay";
   referenceId: string;
   message: string;
+  paymentLinkUrl?: string;
 };
 
 export type AuditActor = "agent" | "policy" | "human" | "ingest";
@@ -146,6 +153,7 @@ export type RunCase = SeedCase & {
   execution?: ExecutionResult;
   operatorNote?: string;
   lastBatchId?: string;
+  paymentLinkUrl?: string;
   timeline: AuditEvent[];
   updatedAt: string;
 };
@@ -226,3 +234,9 @@ export const LEAK_TYPES: LeakType[] = [
   "failed_subscription",
   "overdue_invoice",
 ];
+
+export type RazorpayStatus = {
+  configured: boolean;
+  mode: "off" | "test" | "live";
+  webhookConfigured: boolean;
+};

@@ -32,11 +32,11 @@ export async function POST(
   if (!isAction(body)) return fail("Unknown action");
 
   try {
-    const ws = await mutateWorkspace((current) => {
+    const ws = await mutateWorkspace(async (current) => {
       const found = current.cases.find((c) => c.id === id);
       if (!found) throw new Error("Case not found");
       const beforeLen = found.timeline.length;
-      const updated = applyOperatorAction(found, body, current.policy);
+      const updated = await applyOperatorAction(found, body, current.policy);
       const fresh = updated.timeline.slice(beforeLen);
       return appendAudit(
         {

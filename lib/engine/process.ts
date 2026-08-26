@@ -101,7 +101,7 @@ function bumpContacts(c: RunCase, play: Play, nowIso: string): RunCase {
   };
 }
 
-export function processCase(current: RunCase, policy: PolicyConfig, now: Date): RunCase {
+export async function processCase(current: RunCase, policy: PolicyConfig, now: Date): Promise<RunCase> {
   const ts = now.toISOString();
   const timeline: AuditEvent[] = [];
   const diagnosis = diagnose(current);
@@ -123,7 +123,7 @@ export function processCase(current: RunCase, policy: PolicyConfig, now: Date): 
   const play = selectPlay(current, diagnosis, verdict);
   timeline.push(stamp(current.id, "agent", `play:${play.id}`, play.reason));
 
-  const execution = executePlay(current, play, diagnosis.rootCause);
+  const execution = await executePlay(current, play, diagnosis.rootCause);
   const result = outcomeFrom({
     seed: current,
     play,
@@ -167,7 +167,7 @@ export function processCase(current: RunCase, policy: PolicyConfig, now: Date): 
   } else if (play.id === "promise_to_pay") {
     status = "promised";
     outcome = result;
-  } else if (execution.ok) {
+  } else if (execution.settled) {
     status = "recovered";
     outcome = {
       status: "recovered",
@@ -204,6 +204,7 @@ export function processCase(current: RunCase, policy: PolicyConfig, now: Date): 
       play,
       outcome,
       execution,
+      paymentLinkUrl: execution.paymentLinkUrl ?? current.paymentLinkUrl,
       timeline: [...current.timeline, ...timeline],
       updatedAt: ts,
     },
@@ -216,6 +217,9 @@ export function processCase(current: RunCase, policy: PolicyConfig, now: Date): 
   }
   if (status === "recovered") {
     next.signals = { ...next.signals, promiseToPayDate: undefined };
+  }
+  if (execution.provider === "razorpay") {
+    next.signals = { ...next.signals, razorpayPaymentLinkId: execution.referenceId };
   }
 
   return next;

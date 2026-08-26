@@ -1,5 +1,6 @@
 import { inr } from "../format";
 import { uid } from "../ids";
+import { createPaymentLink, razorpayConfigured } from "../razorpay/client";
 import type { ExecutionResult, Play, RootCause, SeedCase } from "../types";
 
 /** Deterministic 0..1 from case id — sandbox gateways must be replayable. */
@@ -31,11 +32,12 @@ export function recoveryProbability(cause: RootCause, playId: Play["id"]): numbe
   return FIT[cause]?.[playId] ?? 0.2;
 }
 
-export function executePlay(seed: SeedCase, play: Play, cause: RootCause): ExecutionResult {
+function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): ExecutionResult {
   const referenceId = uid("exec");
   if (play.id === "stop") {
     return {
       ok: true,
+      settled: false,
       provider: "policy",
       referenceId,
       message: "No outbound. Policy bound the workflow.",
@@ -44,6 +46,7 @@ export function executePlay(seed: SeedCase, play: Play, cause: RootCause): Execu
   if (play.id === "human_escalate") {
     return {
       ok: true,
+      settled: false,
       provider: "operator",
       referenceId,
       message: `Queued for a human closer. ${inr(seed.amountInr)} is above the auto-touch ceiling.`,
@@ -52,6 +55,7 @@ export function executePlay(seed: SeedCase, play: Play, cause: RootCause): Execu
   if (play.id === "promise_to_pay") {
     return {
       ok: true,
+      settled: false,
       provider: "sandbox.comms",
       referenceId,
       message: "Promise-to-pay captured. Retries paused until the committed date.",
@@ -65,6 +69,7 @@ export function executePlay(seed: SeedCase, play: Play, cause: RootCause): Execu
   if (play.id === "smart_retry") {
     return {
       ok: recovered,
+      settled: recovered,
       provider: "sandbox.payments",
       referenceId,
       message: recovered
@@ -75,6 +80,7 @@ export function executePlay(seed: SeedCase, play: Play, cause: RootCause): Execu
   if (play.id === "hinglish_voice") {
     return {
       ok: recovered,
+      settled: recovered,
       provider: "sandbox.voice",
       referenceId,
       message: recovered
@@ -84,10 +90,46 @@ export function executePlay(seed: SeedCase, play: Play, cause: RootCause): Execu
   }
   return {
     ok: recovered,
+    settled: recovered,
     provider: "sandbox.comms",
     referenceId,
     message: recovered
       ? `Payment link converted on ${play.channel}.`
       : `Payment link delivered on ${play.channel}. Not converted this cycle.`,
   };
+}
+
+export async function executePlay(seed: SeedCase, play: Play, cause: RootCause): Promise<ExecutionResult> {
+  const sandbox = executeSandbox(seed, play, cause);
+  const wantsLink =
+    play.id === "payment_link" || play.id === "smart_retry" || play.id === "hinglish_voice";
+  if (!razorpayConfigured() || !wantsLink) return sandbox;
+
+  try {
+    const link = await createPaymentLink({
+      caseId: seed.id,
+      amountInr: seed.amountInr,
+      name: seed.customer.name,
+      email: seed.customer.email,
+      contact: seed.customer.contact,
+      description: `Nivaara recovery ${seed.id} · ${play.label}`,
+    });
+    return {
+      ok: true,
+      settled: false,
+      provider: "razorpay",
+      referenceId: link.id,
+      paymentLinkUrl: link.short_url,
+      message:
+        play.id === "smart_retry"
+          ? `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
+          : `Razorpay payment link issued: ${link.short_url}`,
+    };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : "Razorpay error";
+    return {
+      ...sandbox,
+      message: `Razorpay link failed (${why}). Sandbox fallback: ${sandbox.message}`,
+    };
+  }
 }

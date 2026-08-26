@@ -1,5 +1,5 @@
 import { computeTotals } from "@/lib/engine/totals";
-import type { AuditEvent, BatchTotals, PolicyConfig, RunCase, Workspace } from "@/lib/types";
+import type { AuditEvent, BatchTotals, PolicyConfig, RazorpayStatus, RunCase, Workspace } from "@/lib/types";
 
 export type WorkspaceView = {
   merchant: Workspace["merchant"];
@@ -9,6 +9,7 @@ export type WorkspaceView = {
   audit: AuditEvent[];
   runs: Workspace["runs"];
   llmConfigured: boolean;
+  razorpay: RazorpayStatus;
 };
 
 export async function loadWorkspace(): Promise<WorkspaceView> {

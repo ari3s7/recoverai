@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { computeTotals } from "@/lib/engine/totals";
 import { llmConfigured } from "@/lib/llm";
+import { razorpayStatus } from "@/lib/razorpay/client";
 import type { Workspace } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -25,5 +26,6 @@ export function workspaceView(ws: Workspace) {
     audit: ws.audit.slice(0, 250),
     runs: ws.runs.slice(0, 12),
     llmConfigured: llmConfigured(),
+    razorpay: razorpayStatus(),
   };
 }

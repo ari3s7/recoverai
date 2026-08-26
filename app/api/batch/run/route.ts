@@ -47,11 +47,11 @@ export async function POST() {
 
         let latest: RunCase | undefined;
         for (const target of eligible) {
-          const ws = await mutateWorkspace((current) => {
+          const ws = await mutateWorkspace(async (current) => {
             const found = current.cases.find((c) => c.id === target.id);
             if (!found || !isBatchEligible(found)) return current;
             const updated = {
-              ...processCase({ ...found, status: "in_flight" }, current.policy, policyNow(current.policy)),
+              ...(await processCase({ ...found, status: "in_flight" }, current.policy, policyNow(current.policy))),
               lastBatchId: batchId,
             };
             const fresh = updated.timeline.slice(found.timeline.length);

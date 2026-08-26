@@ -3,11 +3,11 @@ import { policyNow } from "../policy/defaults";
 import type { CaseActionRequest, PolicyConfig, RunCase } from "../types";
 import { stamp, processCase } from "./process";
 
-export function applyOperatorAction(
+export async function applyOperatorAction(
   current: RunCase,
   action: CaseActionRequest,
   policy: PolicyConfig,
-): RunCase {
+): Promise<RunCase> {
   const now = policyNow(policy);
   const ts = now.toISOString();
 
