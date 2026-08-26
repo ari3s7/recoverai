@@ -1,0 +1,228 @@
+export type LeakType =
+  | "payment_failure"
+  | "abandoned_checkout"
+  | "failed_subscription"
+  | "overdue_invoice";
+
+export type RootCause =
+  | "insufficient_funds"
+  | "expired_card"
+  | "bank_decline"
+  | "mandate_revoked"
+  | "price_shock"
+  | "checkout_friction"
+  | "payment_page_drop"
+  | "retry_exhausted"
+  | "cashflow_delay"
+  | "dispute_unaware"
+  | "forgotten_renewal";
+
+export type PlayId =
+  | "smart_retry"
+  | "payment_link"
+  | "hinglish_voice"
+  | "promise_to_pay"
+  | "human_escalate"
+  | "stop";
+
+export type CaseStatus =
+  | "at_risk"
+  | "in_flight"
+  | "recovered"
+  | "promised"
+  | "escalated"
+  | "stopped"
+  | "held";
+
+export type Flag =
+  | "dnc"
+  | "complaint"
+  | "fraud"
+  | "chargeback"
+  | "quiet_hours"
+  | "high_aov"
+  | "legal";
+
+export type Language = "hinglish" | "hindi" | "english";
+
+export type ChannelPref = "whatsapp" | "voice" | "sms" | "email";
+
+export type Customer = {
+  name: string;
+  city: string;
+  language: Language;
+  phoneMasked: string;
+  channelPref: ChannelPref;
+  company?: string;
+};
+
+export type CaseSignals = {
+  declineCode?: string;
+  dropReason?: "price_shock" | "checkout_friction" | "payment_page_drop";
+  subReason?:
+    | "retry_exhausted"
+    | "expired_card"
+    | "mandate_revoked"
+    | "forgotten_renewal";
+  invoiceReason?: "cashflow_delay" | "dispute_unaware" | "forgotten_renewal";
+  cartItems?: string[];
+  invoiceNo?: string;
+  daysPastDue?: number;
+  retryCount: number;
+  contactsLast7Days: number;
+  lastContactAt?: string;
+  promiseToPayDate?: string;
+  flags: Flag[];
+};
+
+export type SeedCase = {
+  id: string;
+  customer: Customer;
+  leakType: LeakType;
+  amountInr: number;
+  occurredAt: string;
+  merchantSegment: "d2c" | "b2b";
+  signals: CaseSignals;
+};
+
+export type Diagnosis = {
+  rootCause: RootCause;
+  label: string;
+  confidence: number;
+  evidence: string[];
+  narrative: string;
+};
+
+export type PolicyAction = "proceed" | "escalate" | "stop" | "hold";
+
+export type PolicyVerdict = {
+  allowed: boolean;
+  action: PolicyAction;
+  ruleId?: string;
+  reason: string;
+};
+
+export type Play = {
+  id: PlayId;
+  label: string;
+  channel: string;
+  reason: string;
+  script?: string;
+};
+
+export type Outcome = {
+  status: CaseStatus;
+  recoveredInr: number;
+  promisedInr: number;
+  promisedDate?: string;
+  note: string;
+};
+
+export type ExecutionResult = {
+  ok: boolean;
+  provider: "sandbox.payments" | "sandbox.comms" | "sandbox.voice" | "policy" | "operator";
+  referenceId: string;
+  message: string;
+};
+
+export type AuditActor = "agent" | "policy" | "human" | "ingest";
+
+export type AuditEvent = {
+  id: string;
+  ts: string;
+  caseId: string;
+  actor: AuditActor;
+  action: string;
+  reason: string;
+  moneyDeltaInr?: number;
+};
+
+export type RunCase = SeedCase & {
+  status: CaseStatus;
+  diagnosis?: Diagnosis;
+  policy?: PolicyVerdict;
+  play?: Play;
+  outcome?: Outcome;
+  execution?: ExecutionResult;
+  operatorNote?: string;
+  lastBatchId?: string;
+  timeline: AuditEvent[];
+  updatedAt: string;
+};
+
+export type PolicyConfig = {
+  maxContactsPer7Days: number;
+  quietHoursStart: number;
+  quietHoursEnd: number;
+  highAovInr: number;
+  b2bEscalateDpd: number;
+  timezone: "Asia/Kolkata";
+  autoExecute: boolean;
+  sandboxClock: boolean;
+  sandboxClockIso: string;
+};
+
+export type BatchTotals = {
+  exposureInr: number;
+  recoveredInr: number;
+  promisedInr: number;
+  stillAtRiskInr: number;
+  heldInr: number;
+  recoveredCount: number;
+  promisedCount: number;
+  stoppedCount: number;
+  escalatedCount: number;
+  heldCount: number;
+  processedCount: number;
+  recoveryRate: number;
+};
+
+export type BatchRunSummary = {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  caseCount: number;
+  totals: BatchTotals;
+};
+
+export type Workspace = {
+  version: 1;
+  merchant: {
+    name: string;
+    desk: string;
+  };
+  policy: PolicyConfig;
+  cases: RunCase[];
+  audit: AuditEvent[];
+  runs: BatchRunSummary[];
+};
+
+export type BatchStreamEvent =
+  | { type: "start"; id: string; exposureInr: number; caseCount: number }
+  | { type: "case"; case: RunCase; totals: BatchTotals }
+  | { type: "done"; totals: BatchTotals; finishedAt: string; runId: string };
+
+export type CaseActionRequest =
+  | { type: "run" }
+  | { type: "stop"; reason: string }
+  | { type: "escalate"; reason: string }
+  | { type: "mark_recovered"; amountInr?: number; note?: string }
+  | { type: "capture_promise"; date: string; amountInr?: number; note?: string }
+  | { type: "release_hold" };
+
+export const FLAGS: Flag[] = [
+  "dnc",
+  "complaint",
+  "fraud",
+  "chargeback",
+  "quiet_hours",
+  "high_aov",
+  "legal",
+];
+
+export const LEAK_TYPES: LeakType[] = [
+  "payment_failure",
+  "abandoned_checkout",
+  "failed_subscription",
+  "overdue_invoice",
+];
