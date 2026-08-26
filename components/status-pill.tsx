@@ -6,7 +6,7 @@ const TONE: Record<CaseStatus, string> = {
   in_flight: "text-gold border-gold/40 bg-gold/10",
   recovered: "text-gold border-gold/50 bg-gold/10",
   promised: "text-ok border-ok/40 bg-ok/10",
-  escalated: "text-amber-200 border-amber-200/30 bg-amber-200/10",
+  escalated: "text-cyan border-cyan/40 bg-cyan/10",
   stopped: "text-danger border-danger/40 bg-danger/10",
   held: "text-muted border-line bg-white/5",
 };

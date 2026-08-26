@@ -26,10 +26,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-full flex flex-col">
-      <header className="border-b border-line px-5 py-3 flex items-center gap-6 sticky top-0 z-30 bg-background/90 backdrop-blur">
+      <header className="border-b border-gold/20 px-5 py-3 flex items-center gap-6 sticky top-0 z-30 bg-background/90 backdrop-blur">
         <Link href="/" className="shrink-0">
-          <div className="text-[11px] tracking-[0.22em] uppercase text-gold-dim">Track 03</div>
-          <div className="text-lg font-semibold tracking-tight leading-none mt-0.5">RecoverAI</div>
+          <div className="text-lg font-semibold tracking-tight leading-none text-gold">RecoverAI</div>
         </Link>
         <nav className="flex gap-1 text-sm">
           {NAV.map((item) => {
@@ -39,7 +38,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={`px-3 py-1.5 rounded-md ${
-                  active ? "bg-panel text-foreground" : "text-muted hover:text-foreground"
+                  active
+                    ? "bg-gold/10 text-gold border border-gold/30"
+                    : "text-muted hover:text-gold border border-transparent"
                 }`}
               >
                 {item.label}
@@ -49,7 +50,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="ml-auto flex items-center gap-4 text-xs text-muted">
           <span>Nivaara · collections desk</span>
-          <span className="font-mono text-foreground/80 tabular">IST {clock}</span>
+          <span className="font-mono text-gold-dim tabular">IST {clock}</span>
         </div>
       </header>
       <main className="flex-1">{children}</main>

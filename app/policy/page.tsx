@@ -96,7 +96,7 @@ export default function PolicyPage() {
         </label>
       </div>
 
-      <button onClick={save} className="rounded-md bg-gold text-background px-4 py-2 text-sm font-medium">
+      <button onClick={save} className="glow rounded-md bg-gold text-background px-4 py-2 text-sm font-medium">
         Save policy
       </button>
       {saved ? <p className="text-sm text-ok">{saved}</p> : null}
