@@ -1,0 +1,93 @@
+import { inr } from "../format";
+import { uid } from "../ids";
+import type { ExecutionResult, Play, RootCause, SeedCase } from "../types";
+
+/** Deterministic 0..1 from case id — sandbox gateways must be replayable. */
+export function sandboxUnit(id: string, salt = ""): number {
+  let h = 2166136261;
+  const s = id + salt;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 10_000) / 10_000;
+}
+
+const FIT: Record<RootCause, Partial<Record<Play["id"], number>>> = {
+  insufficient_funds: { smart_retry: 0.52, hinglish_voice: 0.4, payment_link: 0.36 },
+  expired_card: { payment_link: 0.74, hinglish_voice: 0.58, smart_retry: 0.08 },
+  bank_decline: { hinglish_voice: 0.38, payment_link: 0.3, smart_retry: 0.18 },
+  mandate_revoked: { payment_link: 0.46 },
+  price_shock: { hinglish_voice: 0.56, payment_link: 0.28 },
+  checkout_friction: { payment_link: 0.44, hinglish_voice: 0.33 },
+  payment_page_drop: { hinglish_voice: 0.5, payment_link: 0.34 },
+  retry_exhausted: { payment_link: 0.41, hinglish_voice: 0.36 },
+  cashflow_delay: { promise_to_pay: 0.88, payment_link: 0.22 },
+  dispute_unaware: { payment_link: 0.37, human_escalate: 0 },
+  forgotten_renewal: { hinglish_voice: 0.61, payment_link: 0.48 },
+};
+
+export function recoveryProbability(cause: RootCause, playId: Play["id"]): number {
+  return FIT[cause]?.[playId] ?? 0.2;
+}
+
+export function executePlay(seed: SeedCase, play: Play, cause: RootCause): ExecutionResult {
+  const referenceId = uid("exec");
+  if (play.id === "stop") {
+    return {
+      ok: true,
+      provider: "policy",
+      referenceId,
+      message: "No outbound. Policy bound the workflow.",
+    };
+  }
+  if (play.id === "human_escalate") {
+    return {
+      ok: true,
+      provider: "operator",
+      referenceId,
+      message: `Queued for a human closer. ${inr(seed.amountInr)} is above the auto-touch ceiling.`,
+    };
+  }
+  if (play.id === "promise_to_pay") {
+    return {
+      ok: true,
+      provider: "sandbox.comms",
+      referenceId,
+      message: "Promise-to-pay captured. Retries paused until the committed date.",
+    };
+  }
+
+  const p = recoveryProbability(cause, play.id);
+  const roll = sandboxUnit(seed.id, play.id);
+  const recovered = roll < p;
+
+  if (play.id === "smart_retry") {
+    return {
+      ok: recovered,
+      provider: "sandbox.payments",
+      referenceId,
+      message: recovered
+        ? `Delayed debit succeeded (${seed.signals.declineCode ?? "NSF"}).`
+        : `Delayed debit still declined (${seed.signals.declineCode ?? "NSF"}). Next cycle requires a new instrument.`,
+    };
+  }
+  if (play.id === "hinglish_voice") {
+    return {
+      ok: recovered,
+      provider: "sandbox.voice",
+      referenceId,
+      message: recovered
+        ? "Voice session completed. Customer paid on the live link."
+        : "Voice session completed. No payment this cycle. Sequence stops.",
+    };
+  }
+  return {
+    ok: recovered,
+    provider: "sandbox.comms",
+    referenceId,
+    message: recovered
+      ? `Payment link converted on ${play.channel}.`
+      : `Payment link delivered on ${play.channel}. Not converted this cycle.`,
+  };
+}
