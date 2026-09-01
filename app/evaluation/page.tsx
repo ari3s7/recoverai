@@ -6,19 +6,29 @@ import type { EvaluationReport } from "@/lib/types";
 
 export default function EvaluationPage() {
   const [report, setReport] = useState<EvaluationReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [dataset, setDataset] = useState<"seed" | "synthetic">("synthetic");
   const [count, setCount] = useState(2000);
 
   const run = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    setReport(null);
     try {
       const res = await fetch("/api/evaluation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dataset, syntheticCount: count }),
       });
-      setReport((await res.json()) as EvaluationReport);
+      const data = (await res.json()) as EvaluationReport & { error?: string };
+      if (!res.ok) {
+        setError(data.error ?? "Evaluation failed");
+        return;
+      }
+      setReport(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Evaluation failed");
     } finally {
       setLoading(false);
     }
@@ -36,6 +46,10 @@ export default function EvaluationPage() {
           <strong className="text-foreground">RecoverAI Recovery Policy</strong> on the same cases and the same
           latent customer outcome. Bulk benchmark: LLM calls: 0. Ground truth is synthetic and hidden from the
           agent. Live OpenAI/Gemini decisions are a separate per-case action on the desk.
+        </p>
+        <p className="text-xs text-gold-dim mt-2">
+          SIMULATED EVALUATION RECOVERY is not merchant cash. REAL/VERIFIED PAYMENT RECOVERY is Command Center
+          recovered ₹ after Razorpay capture, sandbox settlement, or operator confirmation.
         </p>
       </div>
 
@@ -72,6 +86,9 @@ export default function EvaluationPage() {
           {loading ? "Running…" : "Run paired experiment"}
         </button>
       </div>
+      {error ? (
+        <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>
+      ) : null}
 
       {report && b && p ? (
         <>
@@ -190,9 +207,9 @@ export default function EvaluationPage() {
           </section>
 
           <p className="text-xs text-muted">
-            Synthetic evaluation is not real merchant performance. Ground truth is hidden from the agent. Razorpay
-            captures are verified separately via webhook and are not this simulator. Curated demo cases live on
-            Command; this page is the experiment.
+            Synthetic evaluation is SIMULATED EVALUATION RECOVERY — not real merchant performance. Ground truth is
+            hidden from the agent. Razorpay captures are REAL/VERIFIED PAYMENT RECOVERY on Command and are not this
+            simulator. Curated demo cases live on Command; this page is the experiment.
           </p>
         </>
       ) : loading ? (

@@ -3,21 +3,45 @@
 import { useEffect, useState } from "react";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
 import { inr } from "@/lib/format";
-import type { PolicyConfig } from "@/lib/types";
+import type { EvaluationReport, PolicyConfig } from "@/lib/types";
+
+type WhatIfReport = {
+  kind: "whatif";
+  simulated: true;
+  savedPolicyUnchanged: true;
+  current: { policy: EvaluationReport["policy"] };
+  proposed: { policy: EvaluationReport["policy"] };
+  delta: {
+    recoveryRatePctPoints: number;
+    recoveredInr: number;
+    actionCount: number;
+    escalatedCount: number;
+    customerContactCount: number;
+  };
+};
 
 export default function PolicyPage() {
   const [view, setView] = useState<WorkspaceView | null>(null);
   const [policy, setPolicy] = useState<PolicyConfig | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [sim, setSim] = useState<WhatIfReport | null>(null);
+  const [simulating, setSimulating] = useState(false);
+  const [simError, setSimError] = useState<string | null>(null);
+
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    loadWorkspace().then((next) => {
-      if (!cancelled) {
-        setView(next);
-        setPolicy(next.policy);
-      }
-    });
+    loadWorkspace()
+      .then((next) => {
+        if (!cancelled) {
+          setView(next);
+          setPolicy(next.policy);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "Failed to load policy");
+      });
     return () => {
       cancelled = true;
     };
@@ -30,13 +54,46 @@ export default function PolicyPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(policy),
     });
-    const data = (await res.json()) as WorkspaceView;
+    const data = (await res.json()) as WorkspaceView & { error?: string };
+    if (!res.ok) {
+      setSaved(null);
+      setSimError(data.error ?? "Save failed");
+      return;
+    }
     setView(data);
     setPolicy(data.policy);
     setSaved("Policy saved. Next batch uses these stopping rules.");
   }
 
+  async function simulate() {
+    if (!policy) return;
+    setSimulating(true);
+    setSimError(null);
+    try {
+      const res = await fetch("/api/evaluation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset: "seed", proposedPolicy: policy }),
+      });
+      const data = (await res.json()) as WhatIfReport & { error?: string };
+      if (!res.ok || data.kind !== "whatif") {
+        setSimError(data.error ?? "Simulation failed");
+        return;
+      }
+      setSim(data);
+    } finally {
+      setSimulating(false);
+    }
+  }
+
+  if (loadError) return <div className="p-8 text-sm text-danger">{loadError}</div>;
   if (!view || !policy) return <div className="p-8 text-sm text-muted">Loading policy…</div>;
+
+  const d = sim?.delta;
+  const fmtDelta = (n: number, money = false) => {
+    const sign = n > 0 ? "+" : "";
+    return money ? `${sign}${inr(n)}` : `${sign}${n.toFixed(1)}`;
+  };
 
   return (
     <div className="p-5 max-w-3xl space-y-5">
@@ -119,10 +176,49 @@ export default function PolicyPage() {
         </label>
       </div>
 
-      <button onClick={save} className="glow rounded-md bg-gold text-background px-4 py-2 text-sm font-medium">
-        Save policy
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={save} className="glow rounded-md bg-gold text-background px-4 py-2 text-sm font-medium">
+          Save policy
+        </button>
+        <button
+          onClick={simulate}
+          disabled={simulating}
+          className="rounded-md border border-line px-4 py-2 text-sm hover:border-gold/50 disabled:opacity-50"
+        >
+          {simulating ? "Simulating…" : "Simulate vs saved policy"}
+        </button>
+      </div>
       {saved ? <p className="text-sm text-ok">{saved}</p> : null}
+      {simError ? <p className="text-sm text-danger">{simError}</p> : null}
+
+      {sim && d ? (
+        <section className="rounded-lg border border-gold/30 bg-gold/5 p-4 space-y-3">
+          <div className="text-[11px] uppercase tracking-wide text-muted">What-if simulation</div>
+          <p className="text-xs text-muted">
+            Paired deterministic evaluation on the seed desk. Does not save policy and does not move real money.
+            SIMULATED EVALUATION RECOVERY — not Razorpay capture.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-2 text-sm">
+            <SimRow label="Recovery rate" value={`${fmtDelta(d.recoveryRatePctPoints)} pts`} />
+            <SimRow label="Recovered revenue" value={fmtDelta(d.recoveredInr, true)} />
+            <SimRow label="Action count" value={String(d.actionCount > 0 ? `+${d.actionCount}` : d.actionCount)} />
+            <SimRow
+              label="Escalations"
+              value={String(d.escalatedCount > 0 ? `+${d.escalatedCount}` : d.escalatedCount)}
+            />
+            <SimRow
+              label="Customer-contact proxy"
+              value={String(
+                d.customerContactCount > 0 ? `+${d.customerContactCount}` : d.customerContactCount,
+              )}
+            />
+          </div>
+          <p className="text-[11px] text-muted">
+            Saved policy recovered {inr(sim.current.policy.recoveredInr)} · proposed{" "}
+            {inr(sim.proposed.policy.recoveredInr)} · LLM calls: 0
+          </p>
+        </section>
+      ) : null}
 
       <section className="text-sm text-muted space-y-2">
         <p>Also always stop: DNC, complaint, legal, fraud, chargeback.</p>
@@ -133,6 +229,15 @@ export default function PolicyPage() {
           then payment-link re-auth. Recovery window {policy.recoveryWindowDays} days (D2C).
         </p>
       </section>
+    </div>
+  );
+}
+
+function SimRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3 border border-line rounded px-3 py-2 bg-background/40">
+      <span className="text-muted">{label}</span>
+      <span className="tabular text-gold">{value}</span>
     </div>
   );
 }
