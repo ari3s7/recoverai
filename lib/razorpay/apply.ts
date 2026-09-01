@@ -20,17 +20,37 @@ export type RazorpayWebhookInput = {
  * Payment-link creation is not handled here — only ingest + capture.
  * Duplicate captures are no-ops.
  */
-export function applyRazorpayWebhook(current: Workspace, input: RazorpayWebhookInput): Workspace {
+export type RazorpayApplyMeta = {
+  matched: boolean;
+  duplicate: boolean;
+  ingested: boolean;
+};
+
+export function applyRazorpayWebhook(
+  current: Workspace,
+  input: RazorpayWebhookInput,
+): Workspace {
+  return applyRazorpayWebhookWithMeta(current, input).workspace;
+}
+
+export function applyRazorpayWebhookWithMeta(
+  current: Workspace,
+  input: RazorpayWebhookInput,
+): { workspace: Workspace; meta: RazorpayApplyMeta } {
   const { event, payment, link } = input;
+  const none = { matched: false, duplicate: false, ingested: false };
 
   if (event === "payment.failed" && payment) {
     const exists = current.cases.some((c) => c.signals.razorpayPaymentId === payment.id);
-    if (exists) return current;
+    if (exists) return { workspace: current, meta: { ...none, duplicate: true } };
     const created = caseFromRazorpayPayment(
       payment,
       current.cases.map((c) => c.id),
     );
-    return appendAudit({ ...current, cases: [created, ...current.cases] }, created.timeline);
+    return {
+      workspace: appendAudit({ ...current, cases: [created, ...current.cases] }, created.timeline),
+      meta: { matched: true, duplicate: false, ingested: true },
+    };
   }
 
   if (event === "payment.captured" || event === "payment_link.paid") {
@@ -41,11 +61,14 @@ export function applyRazorpayWebhook(current: Workspace, input: RazorpayWebhookI
         (link?.id && c.signals.razorpayPaymentLinkId === link.id) ||
         (payment?.id && c.signals.razorpayPaymentId === payment.id),
     );
-    if (!found) return current;
+    if (!found) return { workspace: current, meta: none };
     if (found.status === "recovered" && (found.outcome?.recoveredInr ?? 0) > 0) {
-      return current;
+      return { workspace: current, meta: { matched: true, duplicate: true, ingested: false } };
     }
     const amount = payment ? Math.round(payment.amount / 100) : found.amountInr;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { workspace: current, meta: none };
+    }
     const ev = stamp(
       found.id,
       "ingest",
@@ -81,11 +104,14 @@ export function applyRazorpayWebhook(current: Workspace, input: RazorpayWebhookI
       timeline: [...found.timeline, ev, recovery],
       updatedAt: new Date().toISOString(),
     };
-    return appendAudit(
-      { ...current, cases: current.cases.map((c) => (c.id === found.id ? updated : c)) },
-      [ev, recovery],
-    );
+    return {
+      workspace: appendAudit(
+        { ...current, cases: current.cases.map((c) => (c.id === found.id ? updated : c)) },
+        [ev, recovery],
+      ),
+      meta: { matched: true, duplicate: false, ingested: false },
+    };
   }
 
-  return current;
+  return { workspace: current, meta: none };
 }

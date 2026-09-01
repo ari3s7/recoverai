@@ -12,12 +12,15 @@ export async function POST() {
   }
   try {
     const failed = await listFailedPayments(80);
+    let imported = 0;
+    let skipped = 0;
     const ws = await mutateWorkspace((current) => {
       const existingIds = current.cases.map((c) => c.id);
       const known = new Set(
         current.cases.map((c) => c.signals.razorpayPaymentId).filter(Boolean) as string[],
       );
       const created: RunCase[] = [];
+      skipped = 0;
       for (const payment of failed) {
         if (known.has(payment.id)) continue;
         try {
@@ -25,16 +28,17 @@ export async function POST() {
           created.push(cse);
           known.add(payment.id);
         } catch {
-          continue;
+          skipped += 1;
         }
       }
+      imported = created.length;
       if (!created.length) return current;
       return appendAudit(
         { ...current, cases: [...created, ...current.cases] },
         created.flatMap((c) => c.timeline),
       );
     });
-    return json({ imported: failed.length, ...workspaceView(ws) });
+    return json({ imported, fetched: failed.length, skipped, ...workspaceView(ws) });
   } catch (err) {
     return fail(err instanceof Error ? err.message : "Razorpay sync failed", 502);
   }

@@ -2,7 +2,7 @@ import { fail, json, workspaceView } from "@/lib/api";
 import { mutateWorkspace } from "@/lib/db/store";
 import type { RazorpayPayment } from "@/lib/razorpay/client";
 import { razorpayStatus, verifyWebhookSignature } from "@/lib/razorpay/client";
-import { applyRazorpayWebhook } from "@/lib/razorpay/apply";
+import { applyRazorpayWebhookWithMeta } from "@/lib/razorpay/apply";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -44,10 +44,20 @@ export async function POST(request: Request) {
   const link = body.payload?.payment_link?.entity;
 
   try {
-    const ws = await mutateWorkspace((current) =>
-      applyRazorpayWebhook(current, { event, payment, link }),
-    );
-    return json({ ok: true, event, ...workspaceView(ws) });
+    let meta = { matched: false, duplicate: false, ingested: false };
+    const ws = await mutateWorkspace((current) => {
+      const applied = applyRazorpayWebhookWithMeta(current, { event, payment, link });
+      meta = applied.meta;
+      return applied.workspace;
+    });
+    return json({
+      ok: true,
+      event,
+      matched: meta.matched,
+      duplicate: meta.duplicate,
+      ingested: meta.ingested,
+      ...workspaceView(ws),
+    });
   } catch (err) {
     return fail(err instanceof Error ? err.message : "Webhook failed", 500);
   }
