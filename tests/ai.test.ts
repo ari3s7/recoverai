@@ -3,8 +3,11 @@ import { test } from "node:test";
 import { gatherCaseContext } from "../lib/agent/context";
 import { interpretCustomerIntent } from "../lib/agent/intent";
 import {
+  buildLiveAiPayload,
+  extractJsonObject,
   parseConfidencePercent,
   parseLlmRecommendation,
+  parseLlmRecommendationResult,
   parseProbability01,
   recommendRecovery,
   recommendRecoveryHeuristic,
@@ -135,3 +138,115 @@ test("heuristic recommendation stays inside the play enum", () => {
   assert.notEqual(agent.recommendedPlay, undefined);
   assert.equal(agent.aiPredictedRecoveryProbability, agent.recoveryProbability);
 });
+
+test("label-style rootCause and play from the model are normalized", () => {
+  const rec = parseLlmRecommendation(
+    {
+      rootCause: "Insufficient funds",
+      recoveryProbability: "67%",
+      recommendedPlay: "Payment Link",
+      confidence: "0.96",
+      reasoning: "5 of 8 prior payments succeeded",
+    },
+    seed,
+    dx,
+    ranked,
+    "gemini",
+  );
+  assert.ok(rec);
+  assert.equal(rec.rootCause, "insufficient_funds");
+  assert.equal(rec.recommendedPlay, "payment_link");
+  assert.equal(rec.recoveryProbability, 0.67);
+  assert.equal(rec.confidence, 96);
+});
+
+test("validator reports distinct rejection reasons", () => {
+  const base = {
+    rootCause: "insufficient_funds",
+    recoveryProbability: 0.4,
+    recommendedPlay: "payment_link",
+    confidence: 0.5,
+    reasoning: ["observable history"],
+  };
+  const cause = parseLlmRecommendationResult({ ...base, rootCause: "made_up" }, seed, dx, ranked, "openai");
+  assert.equal(cause.ok, false);
+  if (!cause.ok) assert.equal(cause.reason, "invalid_rootCause");
+  const play = parseLlmRecommendationResult({ ...base, recommendedPlay: "wire_transfer" }, seed, dx, ranked, "openai");
+  assert.equal(play.ok, false);
+  if (!play.ok) assert.equal(play.reason, "invalid_recommendedPlay");
+  const prob = parseLlmRecommendationResult({ ...base, recoveryProbability: 1.5 }, seed, dx, ranked, "openai");
+  assert.equal(prob.ok, false);
+  if (!prob.ok) assert.equal(prob.reason, "invalid_recoveryProbability");
+  const conf = parseLlmRecommendationResult({ ...base, confidence: 140 }, seed, dx, ranked, "openai");
+  assert.equal(conf.ok, false);
+  if (!conf.ok) assert.equal(conf.reason, "invalid_confidence");
+  const why = parseLlmRecommendationResult({ ...base, reasoning: [] }, seed, dx, ranked, "openai");
+  assert.equal(why.ok, false);
+  if (!why.ok) assert.equal(why.reason, "invalid_reasoning");
+});
+
+test("JSON extraction handles fences, empty text, and invalid JSON", () => {
+  const empty = extractJsonObject("");
+  assert.equal(empty.ok, false);
+  if (!empty.ok) assert.equal(empty.reason, "empty_response");
+  const missing = extractJsonObject("no json here");
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.reason, "json_extract_failed");
+  const broken = extractJsonObject("{not json}");
+  assert.equal(broken.ok, false);
+  if (!broken.ok) assert.equal(broken.reason, "invalid_json");
+  const fenced = extractJsonObject('```json\n{"rootCause":"insufficient_funds"}\n```');
+  assert.equal(fenced.ok, true);
+  if (fenced.ok) assert.equal(fenced.json.rootCause, "insufficient_funds");
+});
+
+test("Live AI payload has no playScores, heuristic answer, or eval secrets", () => {
+  const ctx = gatherCaseContext(seed);
+  const payload = buildLiveAiPayload(ctx, dx);
+  const blob = JSON.stringify(payload);
+  assert.equal("playScores" in payload, false);
+  assert.equal("baselinePlay" in payload, false);
+  assert.equal("recommendedPlay" in payload, false);
+  assert.equal("recoveryProbability" in payload, false);
+  assert.equal("comparedPlays" in payload, false);
+  assert.equal(blob.includes("estimatedRecovery"), false);
+  assert.equal(blob.includes("groundTruth"), false);
+  assert.equal(blob.includes("latentOutcome"), false);
+  assert.deepEqual(payload.allowedPlays, [
+    "smart_retry",
+    "payment_link",
+    "hinglish_voice",
+    "promise_to_pay",
+    "human_escalate",
+    "stop",
+  ]);
+  assert.equal(payload.gatewayHint.rootCause, dx.rootCause);
+  assert.match(payload.instruction, /independent recommendation/i);
+  assert.match(payload.instruction, /not copied from another score/i);
+});
+
+test("parsed Live AI probability stays the model value even when ranking scores differ", () => {
+  const ranked = rankPlays(gatherCaseContext(seed), dx.rootCause, seed);
+  const rec = parseLlmRecommendation(
+    {
+      rootCause: dx.rootCause,
+      recoveryProbability: 0.41,
+      recommendedPlay: "payment_link",
+      confidence: 0.77,
+      reasoning: ["Customer history is observable only"],
+    },
+    seed,
+    dx,
+    ranked,
+    "gemini",
+  );
+  assert.ok(rec);
+  assert.equal(rec.recoveryProbability, 0.41);
+  assert.equal(rec.aiPredictedRecoveryProbability, 0.41);
+  const heuristicScore = ranked.find((r) => r.play === rec.recommendedPlay)?.score;
+  assert.ok(heuristicScore !== undefined);
+  assert.notEqual(rec.recoveryProbability, heuristicScore);
+  assert.equal(rec.recommendedPlay, "payment_link");
+  assert.ok(rec.comparedPlays.length >= 1);
+});
+

@@ -3,12 +3,13 @@ import { baselineRecommendPlay } from "../engine/baseline";
 import { recommendChannel } from "../engine/channel";
 import { diagnose } from "../engine/diagnose";
 import { isMandateCase, nextMandateStep } from "../engine/mandate";
-import { llmConfigured } from "../llm";
+import { llmConfigured, openaiModel, geminiGenerateUrl } from "../llm";
 import { DEFAULT_POLICY, policyNow } from "../policy/defaults";
 import type {
   AgentRecommendation,
   CaseContext,
   Diagnosis,
+  LiveAiFailure,
   PlayEstimate,
   PlayId,
   PolicyConfig,
@@ -17,6 +18,12 @@ import type {
 } from "../types";
 import { gatherCaseContext } from "./context";
 import { interpretCustomerIntent } from "./intent";
+import {
+  fieldNamesOf,
+  isTimeoutError,
+  logLiveAiDiagnostic,
+  valueKindsOf,
+} from "./liveAi";
 import { rankPlays } from "./score";
 import { isValidPlayId } from "./validate";
 
@@ -33,6 +40,17 @@ const ROOT_CAUSES: RootCause[] = [
   "dispute_unaware",
   "forgotten_renewal",
 ];
+
+const ALLOWED_PLAYS: PlayId[] = [
+  "smart_retry",
+  "payment_link",
+  "hinglish_voice",
+  "promise_to_pay",
+  "human_escalate",
+  "stop",
+];
+
+const LIVE_AI_TIMEOUT_MS = 20_000;
 
 function compared(ranked: Array<{ play: PlayId; score: number }>): PlayEstimate[] {
   return ranked
@@ -120,14 +138,57 @@ function heuristicRecommend(
   };
 }
 
-function extractJson(text: string): Record<string, unknown> | null {
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
+export type ExtractJsonResult =
+  | { ok: true; json: Record<string, unknown> }
+  | { ok: false; reason: "empty_response" | "json_extract_failed" | "invalid_json" };
+
+/** Strip fences and parse a JSON object. Does not log or return raw PII-bearing text. */
+export function extractJsonObject(text: string): ExtractJsonResult {
+  const trimmed = text.trim();
+  if (!trimmed) return { ok: false, reason: "empty_response" };
+  const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
   try {
-    return JSON.parse(match[0]) as Record<string, unknown>;
+    const parsed = JSON.parse(unfenced) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return { ok: true, json: parsed as Record<string, unknown> };
+    }
   } catch {
-    return null;
+    /* balanced object below */
   }
+  const start = unfenced.indexOf("{");
+  if (start < 0) return { ok: false, reason: "json_extract_failed" };
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < unfenced.length; i++) {
+    const ch = unfenced[i]!;
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(unfenced.slice(start, i + 1)) as unknown;
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return { ok: true, json: parsed as Record<string, unknown> };
+          }
+          return { ok: false, reason: "invalid_json" };
+        } catch {
+          return { ok: false, reason: "invalid_json" };
+        }
+      }
+    }
+  }
+  return { ok: false, reason: "json_extract_failed" };
 }
 
 const FORBIDDEN_EVIDENCE = /groundTruth|latentOutcome|already recovered|money was recovered/i;
@@ -138,20 +199,65 @@ export function groundReasoning(lines: string[], fallback: string[]): string[] {
   return (cleaned.length ? cleaned : fallback).slice(0, 6);
 }
 
-async function llmRecommend(
-  ctx: CaseContext,
-  dx: Diagnosis,
-  seed: SeedCase,
-  utterance?: string,
-): Promise<AgentRecommendation | null> {
-  const ranked = rankPlays(ctx, dx.rootCause, seed);
-  const payload = {
+function slugify(raw: string): string {
+  return raw.trim().toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+}
+
+/** Map model labels like "Payment Link" onto the play enum. Unknown values stay invalid. */
+export function normalizePlayId(raw: unknown): PlayId | null {
+  if (typeof raw !== "string") return null;
+  const slug = slugify(raw);
+  if (isValidPlayId(slug)) return slug;
+  const lower = raw.trim().toLowerCase();
+  for (const [id, label] of Object.entries(PLAY_LABEL) as Array<[PlayId, string]>) {
+    if (label.toLowerCase() === lower) return id;
+  }
+  return null;
+}
+
+/** Map model labels like "Insufficient funds" onto the root-cause enum. */
+export function normalizeRootCause(raw: unknown): RootCause | null {
+  if (typeof raw !== "string") return null;
+  const slug = slugify(raw);
+  if (ROOT_CAUSES.includes(slug as RootCause)) return slug as RootCause;
+  const lower = raw.trim().toLowerCase();
+  for (const [id, label] of Object.entries(CAUSE_LABEL) as Array<[RootCause, string]>) {
+    if (label.toLowerCase() === lower) return id;
+  }
+  return null;
+}
+
+type ProviderAttempt = {
+  rec: AgentRecommendation | null;
+  failure: LiveAiFailure;
+};
+
+const RECOMMENDATION_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    rootCause: { type: "string", enum: ROOT_CAUSES },
+    recoveryProbability: { type: "number" },
+    recommendedPlay: { type: "string", enum: ALLOWED_PLAYS },
+    confidence: { type: "number" },
+    reasoning: { type: "array", items: { type: "string" } },
+  },
+  required: ["rootCause", "recoveryProbability", "recommendedPlay", "confidence", "reasoning"],
+};
+
+/** Live AI request body. Must not include ranking scores, heuristic plays, or eval secrets. */
+export function buildLiveAiPayload(ctx: CaseContext, dx: Diagnosis, utterance?: string) {
+  return {
     context: {
       caseId: ctx.caseId,
       leakType: ctx.leakType,
       amountInr: ctx.amountInr,
       segment: ctx.segment,
-      customer: ctx.customer,
+      customer: {
+        language: ctx.customer.language,
+        channelPref: ctx.customer.channelPref,
+        city: ctx.customer.city,
+      },
       paymentContext: ctx.paymentContext,
       checkoutContext: ctx.checkoutContext,
       subscriptionContext: ctx.subscriptionContext,
@@ -163,87 +269,204 @@ async function llmRecommend(
     },
     customerUtterance: utterance ?? null,
     gatewayHint: { rootCause: dx.rootCause, label: dx.label },
-    playScores: compared(ranked),
-    allowedPlays: [
-      "smart_retry",
-      "payment_link",
-      "hinglish_voice",
-      "promise_to_pay",
-      "human_escalate",
-      "stop",
-    ],
+    allowedRootCauses: ROOT_CAUSES,
+    allowedPlays: ALLOWED_PLAYS,
     instruction:
-      "You MUST choose independently from the observable context. playScores are decision-time estimates, not an answer key. Return JSON only: {rootCause, recoveryProbability (0-1), recommendedPlay, confidence (0-1), reasoning (max 5 concise observable evidence bullets)}. No chain-of-thought. Policy will validate — you only recommend. Never claim money was recovered.",
+      "You are making an independent recommendation from the observable case context. Do not infer or reproduce a recommendation from any external scoring system. Choose the play that best fits the customer situation. Your recoveryProbability must be your own estimate, not copied from another score. Return JSON only with keys rootCause, recoveryProbability (0-1), recommendedPlay, confidence (0-1), reasoning (array of ≤5 observable evidence strings). Use the allowed enum slugs. Policy will validate — you only recommend. Never claim money was recovered.",
   };
+}
 
-  const system =
-    "You are RecoverAI, a revenue recovery agent for Indian D2C and B2B merchants. Diagnose root cause and recommend ONE bounded play. Do not follow a predetermined play. Never claim money was recovered. Never mention hidden ground truth.";
+const SYSTEM =
+  "You are RecoverAI, a revenue recovery agent for Indian D2C and B2B merchants. Diagnose root cause and recommend ONE bounded play using the allowed enum slugs. You are making an independent recommendation from the observable case context. Do not infer or reproduce a recommendation from any external scoring system. Choose the play that best fits the customer situation. Your recoveryProbability must be your own estimate, not copied from another score. Never claim money was recovered. Never mention hidden ground truth.";
 
-  const tryOpenAI = async (): Promise<AgentRecommendation | null> => {
-    if (!process.env.OPENAI_API_KEY) return null;
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+async function completeAttempt(
+  provider: "openai" | "gemini",
+  text: string,
+  seed: SeedCase,
+  dx: Diagnosis,
+  ranked: Array<{ play: PlayId; score: number }>,
+): Promise<ProviderAttempt> {
+  const extracted = extractJsonObject(text);
+  if (!extracted.ok) {
+    const failure: LiveAiFailure = { reason: extracted.reason, provider };
+    logLiveAiDiagnostic({ provider, reason: extracted.reason, accepted: false });
+    return { rec: null, failure };
+  }
+  const parsed = parseLlmRecommendationResult(extracted.json, seed, dx, ranked, provider);
+  if (!parsed.ok) {
+    const failure: LiveAiFailure = {
+      reason: parsed.reason,
+      provider,
+      fieldNames: fieldNamesOf(extracted.json),
+    };
+    logLiveAiDiagnostic({
+      provider,
+      reason: parsed.reason,
+      fieldNames: failure.fieldNames,
+      valueKinds: valueKindsOf(extracted.json),
+      accepted: false,
+    });
+    return { rec: null, failure };
+  }
+  logLiveAiDiagnostic({
+    provider,
+    fieldNames: fieldNamesOf(extracted.json),
+    accepted: true,
+  });
+  return { rec: parsed.rec, failure: { reason: "invalid_json", provider } };
+}
+
+async function tryOpenAI(
+  payload: ReturnType<typeof buildLiveAiPayload>,
+  seed: SeedCase,
+  dx: Diagnosis,
+  ranked: Array<{ play: PlayId; score: number }>,
+): Promise<ProviderAttempt | null> {
+  if (!process.env.OPENAI_API_KEY) return null;
+  const run = async (responseFormat: unknown) =>
+    fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+        model: openaiModel(),
         temperature: 0.2,
+        response_format: responseFormat,
         messages: [
-          { role: "system", content: system },
+          { role: "system", content: SYSTEM },
           { role: "user", content: JSON.stringify(payload) },
         ],
       }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(LIVE_AI_TIMEOUT_MS),
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const json = extractJson(data.choices?.[0]?.message?.content ?? "");
-    if (!json) return null;
-    return parseLlmRecommendation(json, seed, dx, ranked, "openai");
-  };
 
-  const tryGemini = async (): Promise<AgentRecommendation | null> => {
-    if (!process.env.GEMINI_API_KEY) return null;
-    const res = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": process.env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `${system}\n${JSON.stringify(payload)}` }] }],
-        }),
-        signal: AbortSignal.timeout(8000),
+  try {
+    const jsonSchemaFormat = {
+      type: "json_schema",
+      json_schema: {
+        name: "recovery_recommendation",
+        strict: true,
+        schema: RECOMMENDATION_JSON_SCHEMA,
       },
-    );
-    if (!res.ok) return null;
+    };
+    let res = await run(jsonSchemaFormat);
+    if (res.status === 400) {
+      res = await run({ type: "json_object" });
+    }
+    if (!res.ok) {
+      let apiErrorCode: string | undefined;
+      try {
+        const errBody = (await res.json()) as { error?: { code?: string; type?: string } };
+        apiErrorCode = errBody.error?.code ?? errBody.error?.type;
+      } catch {
+        /* ignore */
+      }
+      logLiveAiDiagnostic({ provider: "openai", reason: "http_error", httpStatus: res.status, apiErrorCode, accepted: false });
+      return { rec: null, failure: { reason: "http_error", provider: "openai", httpStatus: res.status } };
+    }
+    const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    return completeAttempt("openai", content, seed, dx, ranked);
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      logLiveAiDiagnostic({ provider: "openai", reason: "timeout", accepted: false });
+      return { rec: null, failure: { reason: "timeout", provider: "openai" } };
+    }
+    logLiveAiDiagnostic({ provider: "openai", reason: "http_error", accepted: false });
+    return { rec: null, failure: { reason: "http_error", provider: "openai" } };
+  }
+}
+
+const GEMINI_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    rootCause: { type: "STRING" },
+    recoveryProbability: { type: "NUMBER" },
+    recommendedPlay: { type: "STRING" },
+    confidence: { type: "NUMBER" },
+    reasoning: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["rootCause", "recoveryProbability", "recommendedPlay", "confidence", "reasoning"],
+};
+
+async function tryGemini(
+  payload: ReturnType<typeof buildLiveAiPayload>,
+  seed: SeedCase,
+  dx: Diagnosis,
+  ranked: Array<{ play: PlayId; score: number }>,
+): Promise<ProviderAttempt | null> {
+  if (!process.env.GEMINI_API_KEY) return null;
+  try {
+    const res = await fetch(geminiGenerateUrl(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": process.env.GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: `${SYSTEM}\n${JSON.stringify(payload)}` }] }],
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json",
+          responseSchema: GEMINI_RESPONSE_SCHEMA,
+        },
+      }),
+      signal: AbortSignal.timeout(LIVE_AI_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      let apiErrorCode: string | undefined;
+      try {
+        const errBody = (await res.json()) as { error?: { status?: string; code?: number } };
+        apiErrorCode = errBody.error?.status ?? (errBody.error?.code != null ? String(errBody.error.code) : undefined);
+      } catch {
+        /* ignore */
+      }
+      logLiveAiDiagnostic({ provider: "gemini", reason: "http_error", httpStatus: res.status, apiErrorCode, accepted: false });
+      return { rec: null, failure: { reason: "http_error", provider: "gemini", httpStatus: res.status } };
+    }
     const data = (await res.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
-    const json = extractJson(data.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
-    if (!json) return null;
-    return parseLlmRecommendation(json, seed, dx, ranked, "gemini");
-  };
-
-  try {
-    return (await tryOpenAI()) ?? (await tryGemini());
-  } catch {
-    try {
-      return await tryGemini();
-    } catch {
-      return null;
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+    return completeAttempt("gemini", content, seed, dx, ranked);
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      logLiveAiDiagnostic({ provider: "gemini", reason: "timeout", accepted: false });
+      return { rec: null, failure: { reason: "timeout", provider: "gemini" } };
     }
+    logLiveAiDiagnostic({ provider: "gemini", reason: "http_error", accepted: false });
+    return { rec: null, failure: { reason: "http_error", provider: "gemini" } };
   }
+}
+
+async function llmRecommend(
+  ctx: CaseContext,
+  dx: Diagnosis,
+  seed: SeedCase,
+  utterance?: string,
+): Promise<{ rec: AgentRecommendation | null; failure: LiveAiFailure | null }> {
+  const ranked = rankPlays(ctx, dx.rootCause, seed);
+  const payload = buildLiveAiPayload(ctx, dx, utterance);
+  const openai = await tryOpenAI(payload, seed, dx, ranked);
+  if (openai?.rec) return { rec: openai.rec, failure: null };
+  const gemini = await tryGemini(payload, seed, dx, ranked);
+  if (gemini?.rec) return { rec: gemini.rec, failure: null };
+  const failure =
+    gemini?.failure ??
+    openai?.failure ??
+    ({ reason: "no_provider" } satisfies LiveAiFailure);
+  if (!openai && !gemini) {
+    logLiveAiDiagnostic({ provider: "openai", reason: "no_provider", accepted: false });
+  }
+  return { rec: null, failure };
 }
 
 function finiteNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
-    const n = Number(value);
+    const n = Number(value.trim().replace(/%$/, ""));
     return Number.isFinite(n) ? n : null;
   }
   return null;
@@ -267,6 +490,48 @@ export function parseConfidencePercent(value: unknown): number | null {
   return Math.round(n);
 }
 
+export type ParseLlmResult =
+  | { ok: true; rec: AgentRecommendation }
+  | { ok: false; reason: LiveAiFailure["reason"] };
+
+export function parseLlmRecommendationResult(
+  json: Record<string, unknown>,
+  seed: SeedCase,
+  dx: Diagnosis,
+  ranked: Array<{ play: PlayId; score: number }>,
+  provider: "openai" | "gemini",
+): ParseLlmResult {
+  const rootCause = normalizeRootCause(json.rootCause);
+  if (!rootCause) return { ok: false, reason: "invalid_rootCause" };
+  const recommendedPlay = normalizePlayId(json.recommendedPlay);
+  if (!recommendedPlay) return { ok: false, reason: "invalid_recommendedPlay" };
+  const recoveryProbability = parseProbability01(json.recoveryProbability);
+  if (recoveryProbability === null) return { ok: false, reason: "invalid_recoveryProbability" };
+  const confidence = parseConfidencePercent(json.confidence);
+  if (confidence === null) return { ok: false, reason: "invalid_confidence" };
+  const reasoning = Array.isArray(json.reasoning)
+    ? json.reasoning.map(String).map((line) => line.trim()).filter(Boolean).slice(0, 5)
+    : typeof json.reasoning === "string" && json.reasoning.trim()
+      ? [json.reasoning.trim()]
+      : [];
+  if (!reasoning.length) return { ok: false, reason: "invalid_reasoning" };
+  return {
+    ok: true,
+    rec: {
+      rootCause,
+      recoveryProbability,
+      aiPredictedRecoveryProbability: recoveryProbability,
+      recommendedPlay,
+      confidence,
+      reasoning,
+      comparedPlays: compared(ranked),
+      recommendedChannel: recommendChannel(seed, recommendedPlay),
+      provider,
+      baselinePlay: baselineRecommendPlay(seed, dx),
+    },
+  };
+}
+
 export function parseLlmRecommendation(
   json: Record<string, unknown>,
   seed: SeedCase,
@@ -274,31 +539,8 @@ export function parseLlmRecommendation(
   ranked: Array<{ play: PlayId; score: number }>,
   provider: "openai" | "gemini",
 ): AgentRecommendation | null {
-  const rc = String(json.rootCause ?? "");
-  const play = String(json.recommendedPlay ?? "");
-  if (!ROOT_CAUSES.includes(rc as RootCause) || !isValidPlayId(play)) return null;
-  const recoveryProbability = parseProbability01(json.recoveryProbability);
-  const confidence = parseConfidencePercent(json.confidence);
-  if (recoveryProbability === null || confidence === null) return null;
-  const reasoning = Array.isArray(json.reasoning)
-    ? json.reasoning.map(String).slice(0, 5)
-    : typeof json.reasoning === "string"
-      ? [json.reasoning]
-      : null;
-  if (!reasoning) return null;
-  const recommendedPlay = play as PlayId;
-  return {
-    rootCause: rc as RootCause,
-    recoveryProbability,
-    aiPredictedRecoveryProbability: recoveryProbability,
-    recommendedPlay,
-    confidence,
-    reasoning,
-    comparedPlays: compared(ranked),
-    recommendedChannel: recommendChannel(seed, recommendedPlay),
-    provider,
-    baselinePlay: baselineRecommendPlay(seed, dx),
-  };
+  const parsed = parseLlmRecommendationResult(json, seed, dx, ranked, provider);
+  return parsed.ok ? parsed.rec : null;
 }
 
 export function recommendRecoveryHeuristic(
@@ -325,6 +567,7 @@ export type RecoveryRecommendation = {
   heuristic: AgentRecommendation;
   /** Parsed live LLM recommendation, or null when unused/invalid. */
   liveAi: AgentRecommendation | null;
+  liveAiFailure?: LiveAiFailure | null;
 };
 
 export async function recommendRecovery(
@@ -334,18 +577,30 @@ export async function recommendRecovery(
   const policy = opts?.policy ?? DEFAULT_POLICY;
   if (!llmConfigured() || opts?.forceHeuristic) {
     const result = recommendRecoveryHeuristic(seed, policy, opts?.utterance);
-    return { ...result, heuristic: result.agent, liveAi: null };
+    return { ...result, heuristic: result.agent, liveAi: null, liveAiFailure: null };
   }
   const context = gatherCaseContext(seed);
   const diagnosis = diagnose(seed);
   const heuristic = heuristicRecommend(context, diagnosis, seed, policy, opts?.utterance);
   let llm: AgentRecommendation | null = null;
+  let liveAiFailure: LiveAiFailure | null = null;
   try {
-    llm = await llmRecommend(context, diagnosis, seed, opts?.utterance);
-  } catch {
+    const attempted = await llmRecommend(context, diagnosis, seed, opts?.utterance);
+    llm = attempted.rec;
+    liveAiFailure = attempted.failure;
+  } catch (err) {
+    liveAiFailure = {
+      reason: isTimeoutError(err) ? "timeout" : "http_error",
+      provider: process.env.OPENAI_API_KEY ? "openai" : "gemini",
+    };
+    logLiveAiDiagnostic({
+      provider: liveAiFailure.provider ?? "openai",
+      reason: liveAiFailure.reason,
+      accepted: false,
+    });
     llm = null;
   }
-  if (!llm) return { context, diagnosis, agent: heuristic, heuristic, liveAi: null };
+  if (!llm) return { context, diagnosis, agent: heuristic, heuristic, liveAi: null, liveAiFailure };
   return {
     context,
     diagnosis,
@@ -357,5 +612,6 @@ export async function recommendRecovery(
     },
     heuristic,
     liveAi: llm,
+    liveAiFailure: null,
   };
 }

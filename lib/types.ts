@@ -174,8 +174,39 @@ export type AgentRecommendation = {
   baselinePlay: PlayId;
 };
 
-/** Whether processCase attempted a live LLM recommendation. */
-export type LiveAiStatus = "not_run" | "used" | "fallback";
+/**
+ * Live AI attempt outcome. `fallback` is kept for older stored cases.
+ * Failed attempts still run the heuristic — they never authorize execution.
+ */
+export type LiveAiStatus =
+  | "not_run"
+  | "used"
+  | "unavailable"
+  | "timeout"
+  | "invalid_response"
+  | "rejected"
+  | "fallback";
+
+export type LiveAiFailureReason =
+  | "http_error"
+  | "timeout"
+  | "empty_response"
+  | "json_extract_failed"
+  | "invalid_json"
+  | "invalid_rootCause"
+  | "invalid_recommendedPlay"
+  | "invalid_recoveryProbability"
+  | "invalid_confidence"
+  | "invalid_reasoning"
+  | "no_provider";
+
+/** Safe diagnostic stored on the case. No payload text, PII, keys, or ground truth. */
+export type LiveAiFailure = {
+  reason: LiveAiFailureReason;
+  provider?: "openai" | "gemini";
+  httpStatus?: number;
+  fieldNames?: string[];
+};
 
 export type CaseContext = {
   caseId: string;
@@ -280,8 +311,10 @@ export type RunCase = SeedCase & {
   agent?: AgentRecommendation;
   /** Deterministic heuristic snapshot from the same decision. Used for AI vs heuristic comparison. */
   heuristic?: AgentRecommendation;
-  /** not_run until Live AI is attempted; fallback if the LLM was invalid and heuristic was used. */
+  /** not_run until Live AI is attempted; used if a valid LLM rec was applied. */
   liveAiStatus?: LiveAiStatus;
+  /** Why Live AI was not used. Safe codes only — never raw model text or PII. */
+  liveAiFailure?: LiveAiFailure;
   policy?: PolicyVerdict;
   play?: Play;
   outcome?: Outcome;
