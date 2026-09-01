@@ -1,4 +1,4 @@
-import { inr, PLAY_LABEL } from "../format";
+import { CAUSE_LABEL, inr, PLAY_LABEL } from "../format";
 import { uid } from "../ids";
 import { recommendRecovery } from "../agent/recommend";
 import { resolvePlayAfterPolicy } from "../agent/validate";
@@ -107,6 +107,14 @@ export async function processCase(
     forceHeuristic: !opts?.useLiveLlm,
     utterance: opts?.utterance,
   });
+  timeline.push(
+    stamp(
+      current.id,
+      "agent",
+      "DIAGNOSE",
+      `Root cause: ${CAUSE_LABEL[diagnosis.rootCause]}. ${diagnosis.evidence[0] ?? diagnosis.narrative}`,
+    ),
+  );
   const predictedPct = Math.round((agent.aiPredictedRecoveryProbability ?? agent.recoveryProbability) * 100);
   timeline.push(
     stamp(
@@ -156,7 +164,7 @@ export async function processCase(
     );
     timeline.push(stamp(current.id, "policy", auth.auditAction, auth.reason));
   } else {
-    execution = await executePlay(current, play, agent.rootCause);
+    execution = await executePlay(current, play, diagnosis.rootCause);
     if (play.id === "stop") {
       timeline.push(
         stamp(

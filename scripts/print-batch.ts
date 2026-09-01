@@ -9,7 +9,7 @@ const ws = emptyWorkspace();
 const now = policyNow(ws.policy);
 const next: RunCase[] = [];
 for (const c of ws.cases) {
-  next.push(isBatchEligible(c) ? await processCase({ ...c, status: "in_flight" }, ws.policy, now) : c);
+  next.push(isBatchEligible(c, ws.policy) ? await processCase({ ...c, status: "in_flight" }, ws.policy, now) : c);
 }
 const t = computeTotals(next);
 const counts = next.reduce<Record<string, number>>((acc, c) => {

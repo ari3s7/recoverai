@@ -3,6 +3,7 @@ import type { AuditActor } from "@/lib/types";
 const ACTION_LABEL: Record<string, string> = {
   detect: "DETECT",
   DETECT: "DETECT",
+  DIAGNOSE: "DIAGNOSE",
   AI_DECISION: "AI DECISION",
   POLICY_DECISION: "POLICY DECISION",
   ACTION_EXECUTED: "ACTION EXECUTED",

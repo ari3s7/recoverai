@@ -19,7 +19,7 @@ export async function POST() {
   const batchId = uid("run");
   const startedAt = new Date().toISOString();
   const initial = await getWorkspace();
-  const eligible = initial.cases.filter(isBatchEligible);
+  const eligible = initial.cases.filter((c) => isBatchEligible(c, initial.policy));
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -47,25 +47,34 @@ export async function POST() {
 
         let latest: RunCase | undefined;
         for (const target of eligible) {
-          const ws = await mutateWorkspace(async (current) => {
-            const found = current.cases.find((c) => c.id === target.id);
-            if (!found || !isBatchEligible(found)) return current;
-            const updated = {
-              ...(await processCase({ ...found, status: "in_flight" }, current.policy, policyNow(current.policy))),
-              lastBatchId: batchId,
-            };
-            const fresh = updated.timeline.slice(found.timeline.length);
-            return appendAudit(
-              {
-                ...current,
-                cases: current.cases.map((c) => (c.id === target.id ? updated : c)),
-              },
-              fresh,
+          try {
+            const ws = await mutateWorkspace(async (current) => {
+              const found = current.cases.find((c) => c.id === target.id);
+              if (!found || !isBatchEligible(found, current.policy)) return current;
+              const updated = {
+                ...(await processCase({ ...found, status: "in_flight" }, current.policy, policyNow(current.policy))),
+                lastBatchId: batchId,
+              };
+              const fresh = updated.timeline.slice(found.timeline.length);
+              return appendAudit(
+                {
+                  ...current,
+                  cases: current.cases.map((c) => (c.id === target.id ? updated : c)),
+                },
+                fresh,
+              );
+            });
+            latest = ws.cases.find((c) => c.id === target.id);
+            if (latest) {
+              send({ type: "case", case: latest, totals: computeTotals(ws.cases) });
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "case failed";
+            controller.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify({ type: "error", message, caseId: target.id })}\n\n`,
+              ),
             );
-          });
-          latest = ws.cases.find((c) => c.id === target.id);
-          if (latest) {
-            send({ type: "case", case: latest, totals: computeTotals(ws.cases) });
           }
           await sleep(70);
         }
