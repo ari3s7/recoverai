@@ -1,5 +1,6 @@
 import { CAUSE_LABEL, PLAY_LABEL } from "../format";
 import { baselineRecommendPlay } from "../engine/baseline";
+import { recommendChannel } from "../engine/channel";
 import { diagnose } from "../engine/diagnose";
 import { isMandateCase, nextMandateStep } from "../engine/mandate";
 import { llmConfigured } from "../llm";
@@ -91,15 +92,19 @@ function heuristicRecommend(
     `${h.successfulPayments}/${h.lifetimePayments} previous payments succeeded`,
     `${CAUSE_LABEL[dx.rootCause]} on ₹${ctx.amountInr.toLocaleString("en-IN")}`,
     h.retryCount ? `${h.retryCount} prior automatic retries already fired` : "Current failure is isolated (no prior retries)",
+  ];
+  if (dx.rootCause === "expired_card") reasoning.push("Current card is expired");
+  reasoning.push(
     runnerUp
       ? `${PLAY_LABEL[chosen]} estimated ${Math.round(score * 100)}% vs ${PLAY_LABEL[runnerUp.play]} ${Math.round(runnerUp.estimatedRecovery * 100)}%`
       : `Best-fit play ${PLAY_LABEL[chosen]} at ${Math.round(score * 100)}% estimated recovery`,
-  ];
+  );
   if (intent) {
     reasoning.unshift(intent.reply);
   }
   if (ctx.mandateContext) reasoning.push(`Mandate sequencer: ${ctx.mandateContext}`);
   if (h.contactsLast7Days) reasoning.push(`${h.contactsLast7Days} contacts in the last 7 days`);
+  if (h.priorRecoveries) reasoning.push(`${h.priorRecoveries} prior recoveries on this customer`);
 
   return {
     rootCause: dx.rootCause,
@@ -107,8 +112,9 @@ function heuristicRecommend(
     aiPredictedRecoveryProbability: score,
     recommendedPlay: chosen,
     confidence,
-    reasoning: reasoning.slice(0, 5),
+    reasoning: reasoning.slice(0, 6),
     comparedPlays: comps,
+    recommendedChannel: recommendChannel(seed, chosen),
     provider: "heuristic",
     baselinePlay: baselineRecommendPlay(seed, dx),
   };
@@ -122,6 +128,14 @@ function extractJson(text: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+const FORBIDDEN_EVIDENCE = /groundTruth|latentOutcome|already recovered|money was recovered/i;
+
+/** Drop invented/hidden-truth claims. Fall back to observable heuristic evidence. */
+export function groundReasoning(lines: string[], fallback: string[]): string[] {
+  const cleaned = lines.map(String).filter((line) => line.trim() && !FORBIDDEN_EVIDENCE.test(line));
+  return (cleaned.length ? cleaned : fallback).slice(0, 6);
 }
 
 async function llmRecommend(
@@ -165,7 +179,8 @@ async function llmRecommend(
   const system =
     "You are RecoverAI, a revenue recovery agent for Indian D2C and B2B merchants. Diagnose root cause and recommend ONE bounded play. Do not follow a predetermined play. Never claim money was recovered. Never mention hidden ground truth.";
 
-  if (process.env.OPENAI_API_KEY) {
+  const tryOpenAI = async (): Promise<AgentRecommendation | null> => {
+    if (!process.env.OPENAI_API_KEY) return null;
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -187,14 +202,18 @@ async function llmRecommend(
     const json = extractJson(data.choices?.[0]?.message?.content ?? "");
     if (!json) return null;
     return parseLlmRecommendation(json, seed, dx, ranked, "openai");
-  }
+  };
 
-  if (process.env.GEMINI_API_KEY) {
+  const tryGemini = async (): Promise<AgentRecommendation | null> => {
+    if (!process.env.GEMINI_API_KEY) return null;
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": process.env.GEMINI_API_KEY,
+        },
         body: JSON.stringify({
           contents: [{ parts: [{ text: `${system}\n${JSON.stringify(payload)}` }] }],
         }),
@@ -208,9 +227,17 @@ async function llmRecommend(
     const json = extractJson(data.candidates?.[0]?.content?.parts?.[0]?.text ?? "");
     if (!json) return null;
     return parseLlmRecommendation(json, seed, dx, ranked, "gemini");
-  }
+  };
 
-  return null;
+  try {
+    return (await tryOpenAI()) ?? (await tryGemini());
+  } catch {
+    try {
+      return await tryGemini();
+    } catch {
+      return null;
+    }
+  }
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -259,14 +286,16 @@ export function parseLlmRecommendation(
       ? [json.reasoning]
       : null;
   if (!reasoning) return null;
+  const recommendedPlay = play as PlayId;
   return {
     rootCause: rc as RootCause,
     recoveryProbability,
     aiPredictedRecoveryProbability: recoveryProbability,
-    recommendedPlay: play,
+    recommendedPlay,
     confidence,
     reasoning,
     comparedPlays: compared(ranked),
+    recommendedChannel: recommendChannel(seed, recommendedPlay),
     provider,
     baselinePlay: baselineRecommendPlay(seed, dx),
   };
@@ -301,7 +330,22 @@ export async function recommendRecovery(
   }
   const context = gatherCaseContext(seed);
   const diagnosis = diagnose(seed);
-  const llm = await llmRecommend(context, diagnosis, seed, opts?.utterance);
-  const agent = llm ?? heuristicRecommend(context, diagnosis, seed, policy, opts?.utterance);
-  return { context, diagnosis, agent };
+  const heuristic = heuristicRecommend(context, diagnosis, seed, policy, opts?.utterance);
+  let llm: AgentRecommendation | null = null;
+  try {
+    llm = await llmRecommend(context, diagnosis, seed, opts?.utterance);
+  } catch {
+    llm = null;
+  }
+  if (!llm) return { context, diagnosis, agent: heuristic };
+  return {
+    context,
+    diagnosis,
+    agent: {
+      ...llm,
+      rootCause: diagnosis.rootCause,
+      reasoning: groundReasoning(llm.reasoning, heuristic.reasoning),
+      comparedPlays: llm.comparedPlays.length ? llm.comparedPlays : heuristic.comparedPlays,
+    },
+  };
 }
