@@ -7,6 +7,7 @@ import type {
   RunCase,
 } from "../types";
 import { recommendRecoveryHeuristic } from "../agent/recommend";
+import { liveAiUserMessage } from "../agent/liveAi";
 import { explainPolicyDecision, type PolicyHeadline } from "./policyExplain";
 
 export type AiVsHeuristicSide = {
@@ -100,8 +101,14 @@ export function buildAiVsHeuristic(cse: RunCase): AiVsHeuristicView {
 
   let agreement: AiVsHeuristicView["agreement"] = "unavailable";
   let agreementLabel = "";
-  if (liveAiStatus === "fallback") {
-    agreementLabel = "Live AI invalid — heuristic used";
+  if (
+    liveAiStatus === "fallback" ||
+    liveAiStatus === "unavailable" ||
+    liveAiStatus === "timeout" ||
+    liveAiStatus === "invalid_response" ||
+    liveAiStatus === "rejected"
+  ) {
+    agreementLabel = liveAiUserMessage(liveAiStatus, cse.liveAiFailure);
   } else if (liveAi && liveAi.play === heuristic.play) {
     agreement = "same";
     agreementLabel = `Both recommend ${liveAi.playLabel}`;

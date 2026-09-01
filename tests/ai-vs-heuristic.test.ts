@@ -122,7 +122,7 @@ test("AI recommendation is invalid and heuristic fallback is used", async () => 
   });
   assert.equal(view.liveAiStatus, "fallback");
   assert.equal(view.liveAi, null);
-  assert.match(view.agreementLabel, /heuristic used/i);
+  assert.match(view.agreementLabel, /heuristic fallback/i);
   assert.equal(view.heuristic.play, processed.agent?.recommendedPlay);
   assert.equal(view.heuristic.probability, processed.heuristic?.recoveryProbability);
 });

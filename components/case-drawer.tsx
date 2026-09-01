@@ -187,9 +187,7 @@ export function CaseDrawer({
                       <p className="text-xs tabular text-gold">{compare.liveAi.probabilityPct}% predicted</p>
                       <p className="text-[10px] text-muted">{compare.liveAi.confidence}% confidence</p>
                     </>
-                  ) : compare.liveAiStatus === "fallback" ? (
-                    <p className="text-xs text-muted">Invalid response — heuristic used</p>
-                  ) : (
+                  ) : compare.liveAiStatus === "not_run" ? (
                     <>
                       <p className="text-xs text-muted">Live AI not run</p>
                       {llmConfigured ? (
@@ -202,6 +200,10 @@ export function CaseDrawer({
                         </button>
                       ) : null}
                     </>
+                  ) : (
+                    <p className="text-xs text-muted">
+                      {compare.agreementLabel || "Heuristic fallback"}
+                    </p>
                   )}
                 </div>
                 <div className="bg-panel p-2.5 space-y-1">
@@ -211,7 +213,7 @@ export function CaseDrawer({
                   <p className="text-[10px] text-muted">Deterministic</p>
                 </div>
               </div>
-              {compare.agreementLabel ? (
+              {compare.agreement === "same" || compare.agreement === "differ" ? (
                 <p
                   className={`text-[10px] mt-1.5 ${
                     compare.agreement === "differ" || compare.aiDidNotWin ? "text-gold" : "text-muted"
