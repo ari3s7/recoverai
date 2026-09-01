@@ -12,7 +12,7 @@ import { describePromiseLifecycle } from "@/lib/engine/promise";
 import { CAUSE_LABEL, inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
 import { DEFAULT_POLICY, policyNow } from "@/lib/policy/defaults";
 import type { CaseActionRequest, PolicyConfig, RunCase } from "@/lib/types";
-import { auditHeadline } from "./audit-copy";
+import { auditActionShort, auditLane, actionBusyLabel, actionHelp, AI_VS_HEURISTIC_NOTE, friendlyActionError } from "./ui-copy";
 import { StatusPill } from "./status-pill";
 
 function speakHinglish(text: string) {
@@ -50,6 +50,7 @@ export function CaseDrawer({
   const [polishing, setPolishing] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [acting, setActing] = useState(false);
+  const [actingType, setActingType] = useState<CaseActionRequest["type"] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [syncedKey, setSyncedKey] = useState("");
 
@@ -60,12 +61,14 @@ export function CaseDrawer({
     setNarrative(cse.diagnosis?.narrative ?? "");
     setPromiseDate(cse.outcome?.promisedDate ?? cse.signals.promiseToPayDate ?? "");
     setActionError(null);
+    setActingType(null);
   } else if (!cse && syncedKey) {
     setSyncedKey("");
     setScript("");
     setNarrative("");
     setPromiseDate("");
     setActionError(null);
+    setActingType(null);
   }
 
   useEffect(() => {
@@ -94,20 +97,40 @@ export function CaseDrawer({
   const locked = Boolean(busy || acting);
   const policyTone =
     policyExplain.headline === "APPROVED"
-      ? "border-ok/40 text-ok"
+      ? "border-ok/40 text-ok bg-ok/5"
       : policyExplain.headline === "UNEVALUATED"
         ? "border-line text-muted"
-        : "border-danger/50 text-danger";
+        : policyExplain.headline === "QUEUED"
+          ? "border-gold/40 text-gold bg-gold/5"
+          : policyExplain.headline === "HELD"
+            ? "border-line text-muted bg-white/5"
+            : policyExplain.headline === "ESCALATED"
+              ? "border-cyan/40 text-cyan bg-cyan/5"
+              : "border-danger/50 text-danger bg-danger/5";
+  const execFailed = cse.execution?.ok === false;
+  const linkUrl = cse.paymentLinkUrl ?? cse.execution?.paymentLinkUrl;
+  const predictedPct = cse.agent
+    ? Math.round((cse.agent.aiPredictedRecoveryProbability ?? cse.agent.recoveryProbability) * 100)
+    : null;
+  const recIsLiveAi = compare.liveAiStatus === "used" && Boolean(compare.liveAi);
+  const recPlayLabel = recIsLiveAi
+    ? compare.liveAi!.playLabel
+    : cse.agent
+      ? PLAY_LABEL[cse.agent.recommendedPlay]
+      : null;
 
   async function runAction(action: CaseActionRequest) {
     setActing(true);
+    setActingType(action.type);
     setActionError(null);
     try {
       await onAction(open.id, action);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Action failed");
+      const raw = err instanceof Error ? err.message : "Action failed";
+      setActionError(friendlyActionError(raw));
     } finally {
       setActing(false);
+      setActingType(null);
     }
   }
 
@@ -122,7 +145,7 @@ export function CaseDrawer({
       });
       const data = (await res.json()) as { narrative?: string; script?: string; error?: string };
       if (!res.ok) {
-        setActionError(data.error ?? "Polish failed");
+        setActionError(friendlyActionError(data.error ?? "Polish failed"));
         return;
       }
       if (data.narrative) setNarrative(data.narrative);
@@ -134,20 +157,29 @@ export function CaseDrawer({
     }
   }
 
+  const busyLine =
+    polishing
+      ? "Polishing customer-facing copy…"
+      : actingType
+        ? actionBusyLabel(actingType)
+        : acting
+          ? "Checking merchant policy…"
+          : null;
+
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
-      <button className="flex-1 bg-black/50" aria-label="Close inspector" onClick={onClose} />
-      <aside className="w-full max-w-[480px] h-full bg-panel border-l border-line overflow-y-auto">
+      <button className="drawer-overlay flex-1 bg-black/50" aria-label="Close inspector" onClick={onClose} />
+      <aside className="drawer-panel w-full max-w-[540px] h-full bg-panel border-l border-line overflow-y-auto">
         <div className="p-5 border-b border-line flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <div className="font-mono text-xs text-gold-dim">{cse.id}</div>
-            <h2 className="text-lg font-semibold mt-1">{cse.customer.company ?? cse.customer.name}</h2>
+            <h2 className="text-lg font-semibold mt-1 truncate">{cse.customer.company ?? cse.customer.name}</h2>
             <p className="text-xs text-muted mt-1">
               {cse.customer.company ? `${cse.customer.name} · ` : ""}
               {cse.customer.city} · {cse.customer.language} · {cse.customer.phoneMasked}
             </p>
           </div>
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-end gap-2 shrink-0">
             <StatusPill status={cse.status} />
             <button onClick={onClose} className="text-muted hover:text-foreground text-sm">
               Close
@@ -156,35 +188,58 @@ export function CaseDrawer({
         </div>
 
         <div className="p-5 space-y-4 text-sm">
+          {busyLine ? (
+            <div className="rounded-md border border-gold/30 bg-gold/5 px-3 py-2 text-xs text-gold">
+              {busyLine}
+            </div>
+          ) : null}
           {actionError ? (
             <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
               {actionError}
             </div>
           ) : null}
 
-          <section className="rounded-lg border border-line bg-background/40 p-3 space-y-3">
+          <section className="rounded-lg border border-line bg-background/40 p-3 space-y-4">
             <div>
-              <Label>Amount at risk</Label>
-              <p className="text-2xl tabular text-gold font-semibold">{inr(cse.amountInr)}</p>
-              <p className="text-[10px] text-muted">
+              <Label>Case summary</Label>
+              <p className="text-2xl tabular font-semibold">{inr(cse.amountInr)} <span className="text-sm font-normal text-muted">at risk</span></p>
+              <p className="text-[10px] text-muted mt-0.5">
                 {LEAK_LABEL[cse.leakType]} · {cse.merchantSegment.toUpperCase()} · {ist(cse.occurredAt)}
               </p>
-            </div>
-            <div>
-              <Label>Root cause</Label>
-              <p className="font-medium">
-                {rootCause ? CAUSE_LABEL[rootCause] : "Not diagnosed yet. Run recovery policy."}
+              <p className="font-medium mt-2">
+                Root cause: {rootCause ? CAUSE_LABEL[rootCause] : "Not diagnosed yet. Run recovery policy."}
               </p>
             </div>
+
             <div>
-              <Label>AI vs heuristic</Label>
+              <div className="flex items-center gap-2 mb-1">
+                <Label>AI recommendation</Label>
+                <span className="text-[10px] uppercase tracking-wide text-muted border border-line rounded px-1.5 py-0.5">
+                  {recIsLiveAi ? "Live" : cse.agent ? "Estimated" : "Pending"}
+                </span>
+              </div>
+              {recPlayLabel && predictedPct !== null && cse.agent ? (
+                <div>
+                  <p className="text-lg font-semibold">{recPlayLabel}</p>
+                  <p className="text-sm tabular text-muted">
+                    {predictedPct}% {recIsLiveAi ? "predicted" : "estimated"}
+                    {recIsLiveAi ? ` · ${compare.liveAi!.confidence}% confidence` : cse.agent.confidence ? ` · ${cse.agent.confidence}% confidence` : ""}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted">No AI recommendation yet. Run recovery policy or Live AI Agent.</p>
+              )}
+            </div>
+
+            <div>
+              <Label>Live AI vs heuristic</Label>
               <div className="grid grid-cols-2 gap-px rounded-md border border-line overflow-hidden bg-line">
-                <div className="bg-panel p-2.5 space-y-1">
+                <div className="bg-panel p-2.5 space-y-1 min-w-0">
                   <div className="text-[10px] uppercase tracking-wide text-muted">Live AI agent</div>
                   {compare.liveAi ? (
                     <>
                       <p className="font-medium">{compare.liveAi.playLabel}</p>
-                      <p className="text-xs tabular text-gold">{compare.liveAi.probabilityPct}% predicted</p>
+                      <p className="text-xs tabular">{compare.liveAi.probabilityPct}% predicted</p>
                       <p className="text-[10px] text-muted">{compare.liveAi.confidence}% confidence</p>
                     </>
                   ) : compare.liveAiStatus === "not_run" ? (
@@ -193,38 +248,33 @@ export function CaseDrawer({
                       {llmConfigured ? (
                         <button
                           disabled={locked}
+                          title={actionHelp("live_ai")}
                           onClick={() => runAction({ type: "live_ai" })}
                           className="mt-1 text-[10px] text-gold hover:underline disabled:opacity-40"
                         >
-                          Live AI agent
+                          Live AI Agent
                         </button>
                       ) : null}
                     </>
                   ) : (
                     <p className="text-xs text-muted">
-                      {compare.agreementLabel || "Heuristic fallback"}
+                      {compare.agreementLabel || "Heuristic fallback available."}
                     </p>
                   )}
                 </div>
-                <div className="bg-panel p-2.5 space-y-1">
-                  <div className="text-[10px] uppercase tracking-wide text-muted">Heuristic</div>
+                <div className="bg-panel p-2.5 space-y-1 min-w-0">
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Deterministic heuristic</div>
                   <p className="font-medium">{compare.heuristic.playLabel}</p>
-                  <p className="text-xs tabular text-gold">{compare.heuristic.probabilityPct}% estimated</p>
-                  <p className="text-[10px] text-muted">Deterministic</p>
+                  <p className="text-xs tabular">{compare.heuristic.probabilityPct}% estimated</p>
+                  <p className="text-[10px] text-muted">Baseline · not recovered ₹</p>
                 </div>
               </div>
-              {compare.agreement === "same" || compare.agreement === "differ" ? (
-                <p
-                  className={`text-[10px] mt-1.5 ${
-                    compare.agreement === "differ" || compare.aiDidNotWin ? "text-gold" : "text-muted"
-                  }`}
-                >
-                  {compare.agreementLabel}
-                </p>
+              {compare.agreement === "same" ? (
+                <p className="text-[10px] mt-1.5 text-muted">Both recommend the same play</p>
+              ) : compare.agreement === "differ" ? (
+                <p className="text-[10px] mt-1.5 text-gold">{compare.agreementLabel}</p>
               ) : null}
-              <p className="text-[10px] text-muted mt-1">
-                Recommendations only. Predicted % is not recovered ₹.
-              </p>
+              <p className="text-[10px] text-muted mt-1">{AI_VS_HEURISTIC_NOTE}</p>
               {cse.agent?.recommendedChannel && isChannelRecommendationOnly(cse.agent.recommendedChannel) ? (
                 <p className="text-[10px] text-muted mt-1">
                   Channel {CHANNEL_LABEL[cse.agent.recommendedChannel]} is a recommendation only. RecoverAI does
@@ -232,10 +282,19 @@ export function CaseDrawer({
                 </p>
               ) : null}
             </div>
+
             <div className={`rounded-md border px-3 py-2 ${policyTone}`}>
-              <Label>Policy decision</Label>
+              <div className="flex items-center gap-2">
+                <Label>Policy</Label>
+                <span className="text-[10px] uppercase tracking-wide border border-current/30 rounded px-1.5 py-0.5">
+                  Policy-controlled
+                </span>
+              </div>
               <p className="text-lg font-semibold tracking-wide">{policyExplain.headline}</p>
-              <p className="text-xs mt-1 text-foreground/80">Reason: {policyExplain.reason}</p>
+              <p className="text-xs mt-1 text-foreground/90">{policyExplain.caption}</p>
+              {policyExplain.reason && policyExplain.reason !== policyExplain.caption ? (
+                <p className="text-xs mt-1 text-foreground/80">{policyExplain.reason}</p>
+              ) : null}
               <div className="mt-2 pt-2 border-t border-current/15">
                 <Label>Final authorized play</Label>
                 <p className={`font-medium ${compare.outboundExecuted ? "text-foreground" : "text-danger"}`}>
@@ -245,7 +304,7 @@ export function CaseDrawer({
               {policyExplain.aiRecommendation ? (
                 <p className="text-xs mt-1">AI recommendation: {policyExplain.aiRecommendation}</p>
               ) : null}
-              {policyExplain.override ? (
+              {policyExplain.override && policyExplain.headline !== "APPROVED" ? (
                 <p className="text-xs mt-1">
                   Policy override: <span className="text-gold">{policyExplain.override}</span>
                 </p>
@@ -253,11 +312,17 @@ export function CaseDrawer({
               {compare.aiDidNotWin ? (
                 <p className="text-xs mt-1 text-danger">AI did not authorize this action. Policy did.</p>
               ) : null}
-              <p className="text-[10px] text-muted mt-1">Policy is the final authority over the AI.</p>
             </div>
+
             <div>
-              <Label>Execution status</Label>
-              {cse.executionStatus === "executed" && cse.play && cse.play.id !== "stop" && cse.play.id !== "human_escalate" ? (
+              <Label>Execution</Label>
+              {execFailed ? (
+                <p className="font-medium text-danger">
+                  {cse.play?.id === "payment_link" || /razorpay|payment link/i.test(cse.execution?.message ?? "")
+                    ? "Payment link creation failed. No recovery recorded."
+                    : "Action failed. No recovery recorded."}
+                </p>
+              ) : cse.executionStatus === "executed" && cse.play && cse.play.id !== "stop" && cse.play.id !== "human_escalate" ? (
                 <p className="font-medium text-ok">
                   {cse.play.id === "payment_link" || cse.execution?.paymentLinkUrl
                     ? "Payment Link created"
@@ -266,32 +331,47 @@ export function CaseDrawer({
               ) : cse.executionStatus ? (
                 <p className="font-medium text-danger">NOT EXECUTED · {cse.executionStatus.toUpperCase()}</p>
               ) : (
-                <p className="text-muted">Not yet run.</p>
+                <p className="text-muted">Not yet run. Run recovery policy to authorize and execute.</p>
               )}
               {cse.execution?.message ? (
                 <p className="text-xs text-muted mt-1">{cse.execution.message}</p>
               ) : null}
-              {cse.paymentLinkUrl || cse.execution?.paymentLinkUrl ? (
+              {linkUrl && !execFailed ? (
                 <p className="mt-2">
                   <a
-                    href={cse.paymentLinkUrl ?? cse.execution?.paymentLinkUrl}
+                    href={linkUrl}
                     target="_blank"
                     rel="noreferrer"
+                    title="Open the actual Razorpay payment link"
                     className="text-xs text-gold hover:underline"
                   >
                     Open Razorpay payment link
                   </a>
                   <span className="block text-[10px] text-muted mt-1">
-                    Payment link issued ≠ revenue recovered until capture webhook.
+                    Payment link issued ≠ revenue recovered until a verified capture webhook.
                   </span>
+                </p>
+              ) : cse.play?.id === "payment_link" && cse.executionStatus === "executed" && !linkUrl ? (
+                <p className="text-[10px] text-muted mt-1">
+                  Payment may have succeeded, but RecoverAI has not received a verified webhook yet.
                 </p>
               ) : null}
             </div>
-            <div className="rounded-md border border-gold/30 bg-gold/5 px-3 py-2">
-              <Label>Verified recovered</Label>
-              <p className="text-2xl tabular text-gold font-semibold">{inr(recovered)}</p>
+
+            <div className={`rounded-md border px-3 py-2 ${recovered > 0 ? "border-gold/40 bg-gold/5" : "border-line"}`}>
+              <div className="flex items-center gap-2">
+                <Label>Recovery</Label>
+                <span className="text-[10px] uppercase tracking-wide text-gold border border-gold/30 rounded px-1.5 py-0.5">
+                  Verified
+                </span>
+              </div>
+              <p className={`text-2xl tabular font-semibold ${recovered > 0 ? "text-gold" : "text-foreground"}`}>
+                {inr(recovered)} <span className="text-sm font-normal text-muted">verified</span>
+              </p>
               <p className="text-[10px] text-muted mt-1">
-                Counted only after capture, sandbox settlement, or operator confirmation.
+                {recovered > 0
+                  ? "Counted after capture, sandbox settlement, or operator confirmation."
+                  : "No verified recoveries yet. A payment link is not counted as recovered until payment is confirmed."}
               </p>
             </div>
           </section>
@@ -328,7 +408,9 @@ export function CaseDrawer({
                 ))}
               </ul>
             ) : (
-              <p className="text-xs text-muted">No evidence yet. Run recovery policy to generate a grounded recommendation.</p>
+              <p className="text-xs text-muted">
+                No AI evidence yet. Run recovery policy to generate a grounded recommendation.
+              </p>
             )}
             {alternatives.length ? (
               <div>
@@ -375,7 +457,7 @@ export function CaseDrawer({
               </p>
               {ptp.promisedDate ? <p className="text-xs text-muted">Due {ptp.promisedDate}</p> : null}
               {ptp.state === "fulfilled" ? (
-                <p className="text-xs text-ok">Recovered {inr(ptp.recoveredInr)}</p>
+                <p className="text-xs text-ok">{inr(ptp.recoveredInr)} verified recovered</p>
               ) : null}
               {ptp.eligibleForRerun ? (
                 <p className="text-xs text-muted">
@@ -417,17 +499,26 @@ export function CaseDrawer({
           ) : null}
 
           <div className="flex flex-wrap gap-2">
-            <OpButton disabled={locked} onClick={() => runAction({ type: "run" })}>
-              Run recovery policy
+            <OpButton
+              disabled={locked}
+              title={actionHelp("run")}
+              onClick={() => runAction({ type: "run" })}
+            >
+              {actingType === "run" ? actionBusyLabel("run") : "Run recovery policy"}
             </OpButton>
             {llmConfigured ? (
-              <OpButton disabled={locked} onClick={() => runAction({ type: "live_ai" })}>
-                Live AI agent
+              <OpButton
+                disabled={locked}
+                title={actionHelp("live_ai")}
+                onClick={() => runAction({ type: "live_ai" })}
+              >
+                {actingType === "live_ai" ? actionBusyLabel("live_ai") : "Live AI Agent"}
               </OpButton>
             ) : null}
             {cse.customer.language !== "english" ? (
               <OpButton
                 disabled={locked}
+                title={actionHelp("live_ai")}
                 onClick={() =>
                   runAction({
                     type: "live_ai",
@@ -440,25 +531,35 @@ export function CaseDrawer({
             ) : null}
             {llmConfigured ? (
               <OpButton disabled={polishing || locked || !cse.diagnosis} onClick={polish}>
-                {polishing ? "Polishing…" : "Polish copy"}
+                {polishing ? "Polishing customer-facing copy…" : "Polish copy"}
               </OpButton>
             ) : null}
             <OpButton
               disabled={locked || recovered > 0}
+              title={actionHelp("mark_recovered")}
               onClick={() => runAction({ type: "mark_recovered", note: "Operator confirmed payment received." })}
             >
               Mark recovered
             </OpButton>
-            <OpButton disabled={locked} onClick={() => runAction({ type: "stop", reason: "Operator stopped outbound." })}>
+            <OpButton
+              disabled={locked}
+              title={actionHelp("stop")}
+              onClick={() => runAction({ type: "stop", reason: "Operator stopped outbound." })}
+            >
               Stop
             </OpButton>
             <OpButton
               disabled={locked}
+              title={actionHelp("escalate")}
               onClick={() => runAction({ type: "escalate", reason: "Operator pulled to human queue." })}
             >
               Escalate
             </OpButton>
-            <OpButton disabled={locked} onClick={() => runAction({ type: "release_hold" })}>
+            <OpButton
+              disabled={locked}
+              title={actionHelp("release_hold")}
+              onClick={() => runAction({ type: "release_hold" })}
+            >
               Release hold
             </OpButton>
           </div>
@@ -476,6 +577,7 @@ export function CaseDrawer({
             </label>
             <OpButton
               disabled={locked || !promiseDate}
+              title={actionHelp("capture_promise")}
               onClick={() =>
                 runAction({
                   type: "capture_promise",
@@ -494,16 +596,24 @@ export function CaseDrawer({
               <ol className="mt-2 space-y-2">
                 {[...cse.timeline].reverse().map((ev) => (
                   <li key={ev.id} className="border-l border-line pl-3">
-                    <div className="font-mono text-[10px] text-muted">
-                      {ist(ev.ts)} · {auditHeadline(ev.actor, ev.action)}
-                      {ev.moneyDeltaInr ? ` · +${inr(ev.moneyDeltaInr)}` : ""}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] uppercase tracking-wide text-gold-dim">{auditLane(ev)}</span>
+                      <span className="font-mono text-[10px] text-muted">{ist(ev.ts)}</span>
                     </div>
+                    <div className="text-xs font-medium mt-0.5">{auditActionShort(ev)}</div>
                     <div className="text-xs text-foreground/80 whitespace-pre-wrap">{ev.reason}</div>
+                    {ev.moneyDeltaInr ? (
+                      <div className="text-[10px] text-gold tabular mt-0.5">
+                        {inr(ev.moneyDeltaInr)} verified
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ol>
             ) : (
-              <p className="text-xs text-muted mt-1">No events yet.</p>
+              <p className="text-xs text-muted mt-1">
+                No audit events yet. Run recovery policy to record detect → recommend → policy → action.
+              </p>
             )}
           </section>
         </div>
@@ -514,22 +624,44 @@ export function CaseDrawer({
 
 function JourneyRow({ step, last }: { step: JourneyStep; last: boolean }) {
   const tone: Record<JourneyStatus, string> = {
-    done: "border-gold text-gold",
-    current: "border-gold/60 text-foreground",
+    done: "border-gold bg-gold text-background",
+    current: "border-gold/70 text-gold",
     pending: "border-line text-muted",
-    blocked: "border-danger text-danger",
+    blocked: "border-danger bg-danger/20 text-danger",
     skipped: "border-line text-muted",
   };
+  const mark =
+    step.status === "done" ? "✓" : step.status === "blocked" ? "!" : step.status === "current" ? "·" : "";
+  const statusLabel =
+    step.status === "done"
+      ? "Done"
+      : step.status === "blocked"
+        ? "BLOCKED"
+        : step.status === "current"
+          ? "Current"
+          : step.status === "skipped"
+            ? "Skipped"
+            : "Pending";
   return (
     <li className="flex gap-3">
       <div className="flex flex-col items-center">
-        <span className={`mt-0.5 h-2.5 w-2.5 rounded-full border ${tone[step.status]}`} />
+        <span
+          className={`mt-0.5 h-4 w-4 rounded-full border text-[9px] leading-4 text-center font-semibold ${tone[step.status]}`}
+        >
+          {mark}
+        </span>
         {last ? null : <span className="w-px flex-1 bg-line min-h-[18px]" />}
       </div>
-      <div className="pb-3">
-        <div className="text-[11px] uppercase tracking-wide text-muted">
-          {step.title}
-          {step.timestamp ? ` · ${ist(step.timestamp)}` : ""} · {step.actor}
+      <div className="pb-3 min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className="text-[11px] uppercase tracking-wide text-muted">{step.title}</span>
+          <span
+            className={`text-[10px] uppercase tracking-wide ${
+              step.status === "blocked" ? "text-danger" : step.status === "done" ? "text-gold" : "text-muted"
+            }`}
+          >
+            {statusLabel}
+          </span>
         </div>
         <div className="text-xs font-medium">{step.decision}</div>
         {step.reason ? <div className="text-[11px] text-muted">{step.reason}</div> : null}
@@ -555,14 +687,17 @@ function OpButton({
   children,
   onClick,
   disabled,
+  title,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  title?: string;
 }) {
   return (
     <button
       disabled={disabled}
+      title={title}
       onClick={onClick}
       className="rounded-md border border-line px-2.5 py-1.5 text-xs hover:border-gold/50 hover:text-gold disabled:opacity-40"
     >

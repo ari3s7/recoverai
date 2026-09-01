@@ -27,11 +27,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-full flex flex-col">
-      <header className="border-b border-gold/25 px-5 py-3 flex items-center gap-6 sticky top-0 z-30 bg-black/90 backdrop-blur">
+      <header className="border-b border-gold/25 px-4 sm:px-5 py-3 flex items-center gap-3 sm:gap-6 sticky top-0 z-30 bg-black/90 backdrop-blur min-w-0">
         <Link href="/" className="shrink-0">
           <div className="text-lg font-semibold tracking-tight leading-none text-gold">RecoverAI</div>
         </Link>
-        <nav className="flex gap-1 text-sm">
+        <nav className="flex gap-1 text-sm overflow-x-auto min-w-0">
           {NAV.map((item) => {
             const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             return (
@@ -49,8 +49,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="ml-auto flex items-center gap-4 text-xs text-muted">
-          <span>Nivaara · collections desk</span>
+        <div className="ml-auto flex items-center gap-3 sm:gap-4 text-xs text-muted shrink-0">
+          <span className="hidden sm:inline">Nivaara · collections desk</span>
           <span className="font-mono text-gold-dim tabular">IST {clock}</span>
         </div>
       </header>

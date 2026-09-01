@@ -219,10 +219,10 @@ export function buildRecoveryJourney(cse: RunCase): JourneyStep[] {
   const confirmed: JourneyStep = recovered
     ? {
         id: "confirmed",
-        title: "Recovery Confirmed",
+        title: "Verified Recovery",
         timestamp: outcomeEv?.ts ?? cse.updatedAt,
         actor: cse.execution?.provider === "razorpay" ? "INGEST" : "AGENT",
-        decision: `${inr(cse.outcome!.recoveredInr)} RECOVERED`,
+        decision: `${inr(cse.outcome!.recoveredInr)} VERIFIED RECOVERED`,
         status: "done",
         reason:
           cse.execution?.provider === "razorpay"
@@ -233,11 +233,11 @@ export function buildRecoveryJourney(cse: RunCase): JourneyStep[] {
       }
     : {
         id: "confirmed",
-        title: "Recovery Confirmed",
+        title: "Verified Recovery",
         actor: "INGEST",
-        decision: "Not recovered",
+        decision: "Recovery pending",
         status: cse.status === "stopped" || cse.status === "escalated" ? "skipped" : "pending",
-        reason: "Recovery is confirmed only after verified capture or settlement.",
+        reason: "A payment link is not counted as recovered until payment is confirmed.",
       };
 
   const steps = [detect, diagnose, ai, policy, action, outcome, confirmed];

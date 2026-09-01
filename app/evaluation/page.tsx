@@ -83,7 +83,7 @@ export default function EvaluationPage() {
           disabled={loading}
           className="glow rounded-md bg-gold text-background px-4 py-2 text-sm font-medium disabled:opacity-50"
         >
-          {loading ? "Running…" : "Run paired experiment"}
+          {loading ? "Simulating paired evaluation…" : "Run paired experiment"}
         </button>
       </div>
       {error ? (
@@ -99,12 +99,13 @@ export default function EvaluationPage() {
           </p>
 
           <div className="grid sm:grid-cols-3 gap-3">
-            <Metric label="Baseline recovered" value={inr(b.recoveredInr)} />
-            <Metric label="RecoverAI Recovery Policy" value={inr(p.recoveredInr)} gold />
+            <Metric label="Baseline recovered" value={inr(b.recoveredInr)} badge="Simulated" />
+            <Metric label="RecoverAI Recovery Policy" value={inr(p.recoveredInr)} gold badge="Simulated" />
             <Metric
               label="Incremental / lift"
               value={`${inr(report.incrementalRecoveredInr)} (${report.recoveryLiftPct.toFixed(1)}%)`}
               gold
+              badge="Simulated"
             />
           </div>
 
@@ -213,20 +214,38 @@ export default function EvaluationPage() {
           </p>
         </>
       ) : loading ? (
-        <p className="text-sm text-muted">Running paired baseline vs RecoverAI Recovery Policy…</p>
+        <p className="text-sm text-muted">Simulating paired baseline vs RecoverAI Recovery Policy…</p>
       ) : (
         <p className="text-sm text-muted">
-          Choose a dataset and run the experiment. Metrics are calculated live — nothing is hardcoded.
+          No evaluation results yet. Choose a dataset and run the experiment. Metrics are calculated live — nothing is
+          hardcoded. Simulated evaluation recovery is not merchant cash.
         </p>
       )}
     </div>
   );
 }
 
-function Metric({ label, value, gold }: { label: string; value: string; gold?: boolean }) {
+function Metric({
+  label,
+  value,
+  gold,
+  badge,
+}: {
+  label: string;
+  value: string;
+  gold?: boolean;
+  badge?: string;
+}) {
   return (
     <div className="rounded-lg border border-line bg-panel px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <div className="text-[11px] uppercase tracking-wide text-muted">{label}</div>
+        {badge ? (
+          <span className="text-[10px] uppercase tracking-wide text-muted border border-line rounded px-1.5 py-0.5">
+            {badge}
+          </span>
+        ) : null}
+      </div>
       <div className={`mt-1 text-xl tabular ${gold ? "text-gold" : ""}`}>{value}</div>
     </div>
   );

@@ -42,16 +42,16 @@ export function liveAiUserMessage(status: LiveAiStatus, failure?: LiveAiFailure)
   switch (status) {
     case "unavailable":
       return failure?.httpStatus
-        ? `AI unavailable (${provider} HTTP ${failure.httpStatus}) — heuristic fallback`
-        : `AI unavailable — heuristic fallback`;
+        ? `AI unavailable (${provider} HTTP ${failure.httpStatus}) — heuristic fallback available.`
+        : `AI unavailable — heuristic fallback available.`;
     case "timeout":
-      return `AI timeout (${provider}) — heuristic fallback`;
+      return `AI timeout (${provider}). No action was executed.`;
     case "invalid_response":
-      return "AI invalid response — heuristic fallback";
+      return "AI response rejected by validator. No unsafe action was executed.";
     case "rejected":
-      return "AI rejected by validator — heuristic fallback";
+      return "AI response rejected by validator. No unsafe action was executed.";
     case "fallback":
-      return "Heuristic fallback";
+      return "Heuristic fallback available.";
     default:
       return "";
   }

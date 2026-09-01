@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { loadWorkspace, type WorkspaceView } from "@/components/workspace";
-import { auditActionLabel, auditActorLabel } from "@/components/audit-copy";
+import { auditActionShort, auditLane } from "@/components/ui-copy";
 import { inr, ist } from "@/lib/format";
 
 export default function AuditPage() {
@@ -80,7 +80,7 @@ export default function AuditPage() {
         </div>
       </div>
       <p className="text-sm text-muted">
-        {events.length} events · recovered deltas {inr(recovered)}
+        {events.length} events · verified recovered deltas {inr(recovered)}
       </p>
       <div className="flex gap-2">
         <select
@@ -89,11 +89,11 @@ export default function AuditPage() {
           className="bg-panel border border-line rounded px-2 py-1 text-sm"
         >
           <option value="all">All actors</option>
-          <option value="ai">ai</option>
-          <option value="agent">agent</option>
-          <option value="policy">policy</option>
-          <option value="human">human</option>
-          <option value="ingest">ingest</option>
+          <option value="ai">AI</option>
+          <option value="agent">AGENT</option>
+          <option value="policy">POLICY</option>
+          <option value="human">HUMAN</option>
+          <option value="ingest">INGEST / WEBHOOK</option>
         </select>
         <input
           value={q}
@@ -115,18 +115,26 @@ export default function AuditPage() {
             </tr>
           </thead>
           <tbody>
-            {events.map((e) => (
-              <tr key={e.id} className="border-b border-line/70">
-                <td className="px-3 py-2 font-mono text-[11px] text-muted whitespace-nowrap">{ist(e.ts)}</td>
-                <td className="px-3 py-2 font-mono text-xs text-gold-dim">{e.caseId}</td>
-                <td className="px-3 py-2 text-muted">{auditActorLabel(e.actor)}</td>
-                <td className="px-3 py-2">{auditActionLabel(e.action)}</td>
-                <td className="px-3 py-2 text-muted">{e.reason}</td>
-                <td className="px-3 py-2 text-right tabular text-gold">
-                  {e.moneyDeltaInr ? inr(e.moneyDeltaInr) : ""}
+            {events.length ? (
+              events.map((e) => (
+                <tr key={e.id} className="border-b border-line/70">
+                  <td className="px-3 py-2 font-mono text-[11px] text-muted whitespace-nowrap">{ist(e.ts)}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-gold-dim whitespace-nowrap">{e.caseId}</td>
+                  <td className="px-3 py-2 text-gold-dim whitespace-nowrap">{auditLane(e)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{auditActionShort(e)}</td>
+                  <td className="px-3 py-2 text-muted max-w-xl">{e.reason}</td>
+                  <td className="px-3 py-2 text-right tabular text-gold whitespace-nowrap">
+                    {e.moneyDeltaInr ? inr(e.moneyDeltaInr) : ""}
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={6} className="px-3 py-10 text-center text-sm text-muted">
+                  No audit events match this filter. Run a recovery batch or clear the search.
                 </td>
               </tr>
-            ))}
+            )}
           </tbody>
         </table>
       </div>

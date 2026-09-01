@@ -75,10 +75,19 @@ export default function PromisesPage() {
         </p>
       </div>
       <p className="text-sm">
-        {rows.length} open · {inr(amount)} parked · {fulfilled} fulfilled · {broken} broken
+        {rows.length} open · {inr(amount)} promised · {fulfilled} fulfilled · {broken} broken
       </p>
       <div className="rounded-lg border border-line bg-panel overflow-hidden">
-        <CaseTable cases={rows} selectedId={selectedId} onOpen={setSelectedId} />
+        {rows.length ? (
+          <CaseTable cases={rows} selectedId={selectedId} onOpen={setSelectedId} />
+        ) : (
+          <div className="px-4 py-12 text-center text-sm text-muted">
+            No open promises.
+            <span className="block text-xs mt-1">
+              Promised ₹ is not recovered. Capture a promise-to-pay from a case, or wait until a due date.
+            </span>
+          </div>
+        )}
       </div>
       {rows.length ? (
         <ul className="text-xs text-muted space-y-1">

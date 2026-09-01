@@ -185,7 +185,7 @@ export default function PolicyPage() {
           disabled={simulating}
           className="rounded-md border border-line px-4 py-2 text-sm hover:border-gold/50 disabled:opacity-50"
         >
-          {simulating ? "Simulating…" : "Simulate vs saved policy"}
+          {simulating ? "Simulating policy change…" : "Simulate vs saved policy"}
         </button>
       </div>
       {saved ? <p className="text-sm text-ok">{saved}</p> : null}
@@ -193,14 +193,19 @@ export default function PolicyPage() {
 
       {sim && d ? (
         <section className="rounded-lg border border-gold/30 bg-gold/5 p-4 space-y-3">
-          <div className="text-[11px] uppercase tracking-wide text-muted">What-if simulation</div>
+          <div className="flex items-center gap-2">
+            <div className="text-[11px] uppercase tracking-wide text-muted">What-if simulation</div>
+            <span className="text-[10px] uppercase tracking-wide text-muted border border-line rounded px-1.5 py-0.5">
+              Simulated
+            </span>
+          </div>
           <p className="text-xs text-muted">
             Paired deterministic evaluation on the seed desk. Does not save policy and does not move real money.
-            SIMULATED EVALUATION RECOVERY — not Razorpay capture.
+            Simulated evaluation recovery is not Razorpay capture.
           </p>
           <div className="grid sm:grid-cols-2 gap-2 text-sm">
             <SimRow label="Recovery rate" value={`${fmtDelta(d.recoveryRatePctPoints)} pts`} />
-            <SimRow label="Recovered revenue" value={fmtDelta(d.recoveredInr, true)} />
+            <SimRow label="Simulated recovered revenue" value={fmtDelta(d.recoveredInr, true)} />
             <SimRow label="Action count" value={String(d.actionCount > 0 ? `+${d.actionCount}` : d.actionCount)} />
             <SimRow
               label="Escalations"
@@ -214,7 +219,7 @@ export default function PolicyPage() {
             />
           </div>
           <p className="text-[11px] text-muted">
-            Saved policy recovered {inr(sim.current.policy.recoveredInr)} · proposed{" "}
+            Saved policy simulated {inr(sim.current.policy.recoveredInr)} · proposed{" "}
             {inr(sim.proposed.policy.recoveredInr)} · LLM calls: 0
           </p>
         </section>

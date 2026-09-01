@@ -69,7 +69,16 @@ export default function QueuePage() {
         {rows.length} cases · {inr(amount)} gated from automation
       </p>
       <div className="rounded-lg border border-line bg-panel overflow-hidden">
-        <CaseTable cases={rows} selectedId={selectedId} onOpen={setSelectedId} />
+        {rows.length ? (
+          <CaseTable cases={rows} selectedId={selectedId} onOpen={setSelectedId} />
+        ) : (
+          <div className="px-4 py-12 text-center text-sm text-muted">
+            No cases in the human queue.
+            <span className="block text-xs mt-1">
+              High-AOV, 60+ DPD B2B, and auto-execute-off cases land here after policy evaluation.
+            </span>
+          </div>
+        )}
       </div>
       <CaseDrawer
         cse={selected}
