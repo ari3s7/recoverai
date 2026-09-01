@@ -1,5 +1,20 @@
 import type { Diagnosis, Play } from "./types";
 
+export const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.6-flash";
+
+export function openaiModel(): string {
+  return process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL;
+}
+
+export function geminiModel(): string {
+  return process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+}
+
+export function geminiGenerateUrl(model = geminiModel()): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+}
+
 export function llmConfigured(): boolean {
   return Boolean(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY);
 }
@@ -29,7 +44,7 @@ async function openaiPolish(input: PolishInput): Promise<PolishOutput | null> {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
+        model: openaiModel(),
         temperature: 0.4,
         messages: [
           {
@@ -61,7 +76,7 @@ async function geminiPolish(input: PolishInput): Promise<PolishOutput | null> {
   if (!key) return null;
   try {
     const res = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+      geminiGenerateUrl(),
       {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
