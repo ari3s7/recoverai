@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { inr, LEAK_LABEL } from "@/lib/format";
-import type { CaseActionRequest, CaseStatus, LeakType, RunCase } from "@/lib/types";
+import { inr, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
+import { computeDeskAnalytics, computeRecoveryForecast } from "@/lib/engine/analytics";
+import { policyNow } from "@/lib/policy/defaults";
+import type { CaseActionRequest, CaseStatus, LeakType, PlayId, RunCase } from "@/lib/types";
 import { auditHeadline } from "./audit-copy";
 import { CaseDrawer } from "./case-drawer";
 import { CaseTable } from "./case-table";
@@ -97,6 +99,9 @@ export function CommandCenter() {
         if (type === "done") {
           setLiveLine("Batch complete · audit sealed");
         }
+        if (type === "error") {
+          setError((event.message as string) ?? "Batch error");
+        }
       });
       await reload();
     } catch (err) {
@@ -114,8 +119,9 @@ export function CommandCenter() {
     });
     const data = (await res.json()) as WorkspaceView & { error?: string; case?: RunCase };
     if (!res.ok) {
-      setError(data.error ?? "Action failed");
-      return;
+      const message = data.error ?? "Action failed";
+      setError(message);
+      throw new Error(message);
     }
     setView(data);
   }
@@ -123,7 +129,12 @@ export function CommandCenter() {
   async function resetDesk() {
     if (!confirm("Reset the Nivaara workspace back to the seeded 48 cases?")) return;
     const res = await fetch("/api/workspace/reset", { method: "POST" });
-    setView((await res.json()) as WorkspaceView);
+    const data = (await res.json()) as WorkspaceView & { error?: string };
+    if (!res.ok) {
+      setError(data.error ?? "Reset failed");
+      return;
+    }
+    setView(data);
     setSelectedId(null);
     setLiveLine("Workspace reset to seed");
   }
@@ -165,17 +176,17 @@ export function CommandCenter() {
   }
 
   const t = view.totals;
+  const now = policyNow(view.policy);
+  const analytics = computeDeskAnalytics(view.cases, now);
+  const forecast = computeRecoveryForecast(view.cases);
   const leakMix = (
     ["payment_failure", "abandoned_checkout", "failed_subscription", "mandate_failure", "overdue_invoice"] as LeakType[]
-  ).map(
-    (id) => {
-      const subset = view.cases.filter((c) => c.leakType === id);
-      const amount = subset.reduce((s, c) => s + c.amountInr, 0);
-      const recovered = subset.reduce((s, c) => s + (c.outcome?.recoveredInr ?? 0), 0);
-      return { id, amount, recovered, count: subset.length };
-    },
-  );
+  ).map((id) => {
+    const row = analytics.byLeak[id];
+    return { id, amount: row.exposureInr, recovered: row.recoveredInr, count: row.count };
+  });
   const maxMix = Math.max(...leakMix.map((x) => x.amount), 1);
+  const playRows: PlayId[] = ["smart_retry", "payment_link", "hinglish_voice", "promise_to_pay", "human_escalate"];
 
   return (
     <div className="p-5 space-y-5">
@@ -186,8 +197,9 @@ export function CommandCenter() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">RecoverAI Command Center</h1>
-          <p className="text-sm text-muted mt-1">
-            Autonomous revenue recovery, bounded by merchant policy.
+          <p className="text-sm text-muted mt-1 max-w-2xl">
+            RecoverAI identifies revenue at risk, recommends the best recovery action, checks it against merchant
+            policy, executes only when authorized, and verifies actual money recovered.
           </p>
         </div>
         <div className="flex gap-2">
@@ -208,12 +220,83 @@ export function CommandCenter() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
-        <Kpi label="Recovered" value={inr(t.recoveredInr)} gold hero />
-        <Kpi label="Exposure" value={inr(t.exposureInr)} />
+        <Kpi label="Verified recovered" value={inr(t.recoveredInr)} gold hero />
+        <Kpi label="Revenue at risk" value={inr(t.stillAtRiskInr)} />
         <Kpi label="Recovery rate" value={`${Math.round(t.recoveryRate * 100)}%`} />
         <Kpi label="Promised" value={inr(t.promisedInr)} />
         <Kpi label="Stopped" value={String(t.stoppedCount)} />
         <Kpi label="Escalated" value={String(t.escalatedCount)} />
+      </div>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <Kpi label="Actions / recovery" value={analytics.actionsPerRecovery ? analytics.actionsPerRecovery.toFixed(2) : "—"} />
+        <Kpi label="Promises created" value={String(analytics.promisesCreated)} />
+        <Kpi label="Promises fulfilled" value={String(analytics.promisesFulfilled)} />
+        <Kpi label="Promises broken" value={String(analytics.promisesBroken)} />
+        <Kpi label="Outbound actions" value={String(analytics.outboundActionCount)} />
+      </div>
+
+      <section className="rounded-lg border border-line bg-panel p-4">
+        <div className="text-[11px] uppercase tracking-wide text-muted">Recovery forecast</div>
+        <p className="text-[10px] text-muted mt-1">
+          From live desk state. Predicted values use existing AI scores on open cases — not an ML model, not verified money.
+        </p>
+        <div className="grid sm:grid-cols-4 gap-3 mt-3">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-muted">Revenue at risk</div>
+            <div className="text-lg tabular">{inr(forecast.revenueAtRisk)}</div>
+          </div>
+          {forecast.predictedRecoverableInr !== null ? (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">Predicted recoverable</div>
+              <div className="text-lg tabular text-gold">{inr(forecast.predictedRecoverableInr)}</div>
+            </div>
+          ) : null}
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-muted">Verified recovered</div>
+            <div className="text-lg tabular text-gold">{inr(forecast.verifiedRecoveredInr)}</div>
+          </div>
+          {forecast.scoredOpenCount ? (
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted">High-confidence open</div>
+              <div className="text-lg tabular">{forecast.highConfidenceOpenCount}</div>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <div className="grid lg:grid-cols-2 gap-3">
+        <section className="rounded-lg border border-line bg-panel p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted mb-3">Recovery by action</div>
+          <div className="space-y-2">
+            {playRows.map((id) => {
+              const row = analytics.byPlay[id];
+              return (
+                <div key={id} className="flex items-baseline justify-between text-sm gap-3">
+                  <span className="text-muted">{PLAY_LABEL[id]}</span>
+                  <span className="tabular text-gold">
+                    {inr(row.recoveredInr)}
+                    <span className="text-muted text-xs"> · {row.recoveredCount}/{row.count}</span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+        <section className="rounded-lg border border-line bg-panel p-4">
+          <div className="text-[11px] uppercase tracking-wide text-muted mb-3">Recovery by leak type</div>
+          <div className="space-y-2">
+            {leakMix.map((row) => (
+              <div key={row.id} className="flex items-baseline justify-between text-sm gap-3">
+                <span className="text-muted">{LEAK_LABEL[row.id]}</span>
+                <span className="tabular text-gold">
+                  {inr(row.recovered)}
+                  <span className="text-muted text-xs"> · {row.count} cases</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
 
       <div className="grid lg:grid-cols-[1fr_320px] gap-4">
@@ -328,7 +411,11 @@ export function CommandCenter() {
                 sample.csv
               </a>
             </div>
-            {ingestMsg ? <p className="text-xs text-ok">{ingestMsg}</p> : null}
+            {ingestMsg ? (
+              <p className={`text-xs ${ingestMsg.toLowerCase().includes("fail") ? "text-danger" : "text-ok"}`}>
+                {ingestMsg}
+              </p>
+            ) : null}
           </section>
 
           <section className="rounded-lg border border-line bg-panel p-4 space-y-3">
@@ -352,7 +439,7 @@ export function CommandCenter() {
                       return;
                     }
                     setView(data);
-                    setIngestMsg(`Synced Razorpay failed payments`);
+                    setIngestMsg(`Imported ${data.imported ?? 0} failed payments`);
                   }}
                   className="text-xs border border-gold/40 text-gold rounded px-2 py-1 hover:bg-gold/10"
                 >
@@ -375,6 +462,7 @@ export function CommandCenter() {
         cse={selected}
         llmConfigured={view.llmConfigured}
         busy={running}
+        policy={view.policy}
         onClose={() => setSelectedId(null)}
         onAction={onAction}
       />
