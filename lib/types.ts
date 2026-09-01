@@ -48,6 +48,8 @@ export type Language = "hinglish" | "hindi" | "english";
 
 export type ChannelPref = "whatsapp" | "voice" | "sms" | "email";
 
+export type RecommendedChannel = ChannelPref | "payments" | "operator" | "none";
+
 export type Customer = {
   name: string;
   city: string;
@@ -165,6 +167,8 @@ export type AgentRecommendation = {
   confidence: number;
   reasoning: string[];
   comparedPlays: PlayEstimate[];
+  /** Suggested communication path. Not an outbound send unless the play actually executes. */
+  recommendedChannel: RecommendedChannel;
   provider: "openai" | "gemini" | "heuristic";
   /** Naive baseline play for A/B comparison on the same case. */
   baselinePlay: PlayId;
