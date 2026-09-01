@@ -316,17 +316,25 @@ export function recommendRecoveryHeuristic(
   return { context, diagnosis, agent };
 }
 
+export type RecoveryRecommendation = {
+  context: CaseContext;
+  diagnosis: Diagnosis;
+  /** Recommendation sent to policy. Live LLM when valid; otherwise heuristic. */
+  agent: AgentRecommendation;
+  /** Deterministic heuristic from the same context. Never a second fake AI call. */
+  heuristic: AgentRecommendation;
+  /** Parsed live LLM recommendation, or null when unused/invalid. */
+  liveAi: AgentRecommendation | null;
+};
+
 export async function recommendRecovery(
   seed: SeedCase,
   opts?: { forceHeuristic?: boolean; policy?: PolicyConfig; utterance?: string },
-): Promise<{
-  context: CaseContext;
-  diagnosis: Diagnosis;
-  agent: AgentRecommendation;
-}> {
+): Promise<RecoveryRecommendation> {
   const policy = opts?.policy ?? DEFAULT_POLICY;
   if (!llmConfigured() || opts?.forceHeuristic) {
-    return recommendRecoveryHeuristic(seed, policy, opts?.utterance);
+    const result = recommendRecoveryHeuristic(seed, policy, opts?.utterance);
+    return { ...result, heuristic: result.agent, liveAi: null };
   }
   const context = gatherCaseContext(seed);
   const diagnosis = diagnose(seed);
@@ -337,7 +345,7 @@ export async function recommendRecovery(
   } catch {
     llm = null;
   }
-  if (!llm) return { context, diagnosis, agent: heuristic };
+  if (!llm) return { context, diagnosis, agent: heuristic, heuristic, liveAi: null };
   return {
     context,
     diagnosis,
@@ -347,5 +355,7 @@ export async function recommendRecovery(
       reasoning: groundReasoning(llm.reasoning, heuristic.reasoning),
       comparedPlays: llm.comparedPlays.length ? llm.comparedPlays : heuristic.comparedPlays,
     },
+    heuristic,
+    liveAi: llm,
   };
 }

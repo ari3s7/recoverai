@@ -1,6 +1,7 @@
 import { CAUSE_LABEL, inr, PLAY_LABEL } from "../format";
 import { uid } from "../ids";
 import { recommendRecovery } from "../agent/recommend";
+import { llmConfigured } from "../llm";
 import { resolvePlayAfterPolicy } from "../agent/validate";
 import type {
   AuditEvent,
@@ -102,11 +103,18 @@ export async function processCase(
     );
   }
 
-  const { diagnosis, agent } = await recommendRecovery(current, {
+  const { diagnosis, agent, heuristic, liveAi } = await recommendRecovery(current, {
     policy,
     forceHeuristic: !opts?.useLiveLlm,
     utterance: opts?.utterance,
   });
+  const liveAiStatus = opts?.useLiveLlm
+    ? liveAi
+      ? "used"
+      : llmConfigured()
+        ? "fallback"
+        : "not_run"
+    : "not_run";
   timeline.push(
     stamp(
       current.id,
@@ -282,6 +290,8 @@ export async function processCase(
     status,
     diagnosis,
     agent,
+    heuristic,
+    liveAiStatus,
     policy: verdict,
     play,
     outcome,

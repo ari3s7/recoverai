@@ -6,6 +6,7 @@ import { CHANNEL_LABEL, isChannelRecommendationOnly } from "@/lib/engine/channel
 import { buildRecoveryJourney, type JourneyStatus, type JourneyStep } from "@/lib/engine/journey";
 import { describeMandateSequence, isMandateCase } from "@/lib/engine/mandate";
 import { formatPlannedWhen, planNextAction } from "@/lib/engine/nextAction";
+import { buildAiVsHeuristic } from "@/lib/engine/aiVsHeuristic";
 import { explainPolicyDecision } from "@/lib/engine/policyExplain";
 import { describePromiseLifecycle } from "@/lib/engine/promise";
 import { CAUSE_LABEL, inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
@@ -85,9 +86,7 @@ export function CaseDrawer({
   const ptp = describePromiseLifecycle(cse, now);
   const history = getCustomerHistory(cse);
   const recovered = cse.outcome?.recoveredInr ?? 0;
-  const predicted = cse.agent
-    ? Math.round((cse.agent.aiPredictedRecoveryProbability ?? cse.agent.recoveryProbability) * 100)
-    : null;
+  const compare = buildAiVsHeuristic(cse);
   const alternatives = (cse.agent?.comparedPlays ?? [])
     .filter((p) => p.play !== cse.agent?.recommendedPlay)
     .slice(0, 3);
@@ -178,38 +177,69 @@ export function CaseDrawer({
               </p>
             </div>
             <div>
-              <Label>AI recommendation</Label>
-              <p className="font-medium">
-                {cse.agent
-                  ? PLAY_LABEL[cse.agent.recommendedPlay]
-                  : "No recommendation yet. Run recovery policy."}
-                {cse.agent?.recommendedChannel ? (
-                  <span className="text-muted font-normal">
-                    {" "}
-                    · {CHANNEL_LABEL[cse.agent.recommendedChannel]}
-                  </span>
-                ) : null}
+              <Label>AI vs heuristic</Label>
+              <div className="grid grid-cols-2 gap-px rounded-md border border-line overflow-hidden bg-line">
+                <div className="bg-panel p-2.5 space-y-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Live AI agent</div>
+                  {compare.liveAi ? (
+                    <>
+                      <p className="font-medium">{compare.liveAi.playLabel}</p>
+                      <p className="text-xs tabular text-gold">{compare.liveAi.probabilityPct}% predicted</p>
+                      <p className="text-[10px] text-muted">{compare.liveAi.confidence}% confidence</p>
+                    </>
+                  ) : compare.liveAiStatus === "fallback" ? (
+                    <p className="text-xs text-muted">Invalid response — heuristic used</p>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted">Live AI not run</p>
+                      {llmConfigured ? (
+                        <button
+                          disabled={locked}
+                          onClick={() => runAction({ type: "live_ai" })}
+                          className="mt-1 text-[10px] text-gold hover:underline disabled:opacity-40"
+                        >
+                          Live AI agent
+                        </button>
+                      ) : null}
+                    </>
+                  )}
+                </div>
+                <div className="bg-panel p-2.5 space-y-1">
+                  <div className="text-[10px] uppercase tracking-wide text-muted">Heuristic</div>
+                  <p className="font-medium">{compare.heuristic.playLabel}</p>
+                  <p className="text-xs tabular text-gold">{compare.heuristic.probabilityPct}% estimated</p>
+                  <p className="text-[10px] text-muted">Deterministic</p>
+                </div>
+              </div>
+              {compare.agreementLabel ? (
+                <p
+                  className={`text-[10px] mt-1.5 ${
+                    compare.agreement === "differ" || compare.aiDidNotWin ? "text-gold" : "text-muted"
+                  }`}
+                >
+                  {compare.agreementLabel}
+                </p>
+              ) : null}
+              <p className="text-[10px] text-muted mt-1">
+                Recommendations only. Predicted % is not recovered ₹.
               </p>
               {cse.agent?.recommendedChannel && isChannelRecommendationOnly(cse.agent.recommendedChannel) ? (
                 <p className="text-[10px] text-muted mt-1">
-                  Channel is a recommendation only. RecoverAI does not send WhatsApp, SMS, voice, or email.
+                  Channel {CHANNEL_LABEL[cse.agent.recommendedChannel]} is a recommendation only. RecoverAI does
+                  not send WhatsApp, SMS, voice, or email.
                 </p>
               ) : null}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Recovery probability</Label>
-                <p className="text-xl tabular text-gold">{predicted !== null ? `${predicted}%` : "—"}</p>
-              </div>
-              <div>
-                <Label>Confidence</Label>
-                <p className="text-xl tabular">{cse.agent ? `${cse.agent.confidence}%` : "—"}</p>
-              </div>
             </div>
             <div className={`rounded-md border px-3 py-2 ${policyTone}`}>
               <Label>Policy decision</Label>
               <p className="text-lg font-semibold tracking-wide">{policyExplain.headline}</p>
               <p className="text-xs mt-1 text-foreground/80">Reason: {policyExplain.reason}</p>
+              <div className="mt-2 pt-2 border-t border-current/15">
+                <Label>Final authorized play</Label>
+                <p className={`font-medium ${compare.outboundExecuted ? "text-foreground" : "text-danger"}`}>
+                  {compare.finalActionLabel}
+                </p>
+              </div>
               {policyExplain.aiRecommendation ? (
                 <p className="text-xs mt-1">AI recommendation: {policyExplain.aiRecommendation}</p>
               ) : null}
@@ -217,6 +247,9 @@ export function CaseDrawer({
                 <p className="text-xs mt-1">
                   Policy override: <span className="text-gold">{policyExplain.override}</span>
                 </p>
+              ) : null}
+              {compare.aiDidNotWin ? (
+                <p className="text-xs mt-1 text-danger">AI did not authorize this action. Policy did.</p>
               ) : null}
               <p className="text-[10px] text-muted mt-1">Policy is the final authority over the AI.</p>
             </div>

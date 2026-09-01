@@ -174,6 +174,9 @@ export type AgentRecommendation = {
   baselinePlay: PlayId;
 };
 
+/** Whether processCase attempted a live LLM recommendation. */
+export type LiveAiStatus = "not_run" | "used" | "fallback";
+
 export type CaseContext = {
   caseId: string;
   leakType: LeakType;
@@ -273,7 +276,12 @@ export type AuditEvent = {
 export type RunCase = SeedCase & {
   status: CaseStatus;
   diagnosis?: Diagnosis;
+  /** Recommendation that went to policy (live LLM if valid, otherwise heuristic). Not the authorized play. */
   agent?: AgentRecommendation;
+  /** Deterministic heuristic snapshot from the same decision. Used for AI vs heuristic comparison. */
+  heuristic?: AgentRecommendation;
+  /** not_run until Live AI is attempted; fallback if the LLM was invalid and heuristic was used. */
+  liveAiStatus?: LiveAiStatus;
   policy?: PolicyVerdict;
   play?: Play;
   outcome?: Outcome;
