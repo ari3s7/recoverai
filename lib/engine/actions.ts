@@ -2,6 +2,7 @@ import { inr } from "../format";
 import { policyNow } from "../policy/defaults";
 import type { CaseActionRequest, PolicyConfig, RunCase } from "../types";
 import { stamp, processCase } from "./process";
+import { isValidPromiseDate } from "./promise";
 
 export async function applyOperatorAction(
   current: RunCase,
@@ -57,6 +58,9 @@ export async function applyOperatorAction(
   }
 
   if (action.type === "mark_recovered") {
+    if (current.status === "recovered" && (current.outcome?.recoveredInr ?? 0) > 0) {
+      return current;
+    }
     const amount = action.amountInr ?? current.amountInr;
     const note = action.note ?? `Operator recorded recovery of ${inr(amount)}.`;
     const event = stamp(current.id, "human", "operator.recover", note, amount);
@@ -78,6 +82,12 @@ export async function applyOperatorAction(
   }
 
   if (action.type === "capture_promise") {
+    if (!isValidPromiseDate(action.date)) {
+      throw new Error("Invalid promise date");
+    }
+    if (current.status === "promised" && current.signals.promiseToPayDate === action.date) {
+      return current;
+    }
     const amount = action.amountInr ?? current.amountInr;
     const note = action.note ?? `Promise-to-pay ${action.date} for ${inr(amount)}.`;
     const event = stamp(current.id, "human", "operator.promise", note);

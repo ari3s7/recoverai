@@ -46,6 +46,22 @@ test("fulfilled promise is marked fulfilled via operator recover", async () => {
   assert.equal(paid.signals.promiseToPayDate, undefined);
 });
 
+test("duplicate promise for the same date is ignored", async () => {
+  const cse = asRunCase(byName(SEED_CASES, "Ananya Mehta"));
+  const first = await applyOperatorAction(
+    cse,
+    { type: "capture_promise", date: "2026-09-10" },
+    DEFAULT_POLICY,
+  );
+  const second = await applyOperatorAction(
+    first,
+    { type: "capture_promise", date: "2026-09-10" },
+    DEFAULT_POLICY,
+  );
+  assert.equal(second.timeline.length, first.timeline.length);
+  assert.equal(second.signals.promiseToPayDate, "2026-09-10");
+});
+
 test("breached promise follows remaining policy", async () => {
   const cse = asRunCase(byName(SEED_CASES, "Saffron Traders"));
   cse.signals.promiseToPayDate = "2026-08-01";
