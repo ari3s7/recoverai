@@ -82,13 +82,19 @@ export function friendlyActionError(message: string): string {
     return paymentLinkFailureCopy(m.includes("temporarily") ? "transient_error" : "permanent_error");
   }
   if (m.includes("timeout") || m.includes("timed out")) {
-    return "AI request timed out. No action was executed.";
+    return "AI timeout. Heuristic fallback available.";
+  }
+  if (m.includes("503") || m.includes("provider returned 503")) {
+    return "AI unavailable — provider returned 503. Heuristic fallback available.";
   }
   if (m.includes("unavailable") || m.includes("insufficient_quota") || /\b429\b/.test(m)) {
     return "AI unavailable — heuristic fallback available.";
   }
+  if (m.includes("invalid response")) {
+    return "AI invalid response. Heuristic fallback available.";
+  }
   if (m.includes("invalid") && (m.includes("json") || m.includes("response") || m.includes("validator"))) {
-    return "AI response rejected by validator. No unsafe action was executed.";
+    return "AI rejected by validator. Heuristic fallback available.";
   }
   if (m.includes("webhook")) {
     return "Payment may have succeeded, but RecoverAI has not received a verified webhook yet.";

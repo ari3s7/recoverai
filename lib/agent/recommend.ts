@@ -3,7 +3,7 @@ import { baselineRecommendPlay } from "../engine/baseline";
 import { recommendChannel } from "../engine/channel";
 import { diagnose } from "../engine/diagnose";
 import { isMandateCase, nextMandateStep } from "../engine/mandate";
-import { llmConfigured, openaiModel, geminiGenerateUrl } from "../llm";
+import { llmConfigured, openaiModel, geminiGenerateUrl, geminiModel } from "../llm";
 import { DEFAULT_POLICY, policyNow } from "../policy/defaults";
 import type {
   AgentRecommendation,
@@ -230,7 +230,23 @@ export function normalizeRootCause(raw: unknown): RootCause | null {
 type ProviderAttempt = {
   rec: AgentRecommendation | null;
   failure: LiveAiFailure;
+  httpStatus?: number;
+  durationMs?: number;
+  apiErrorCode?: string;
+  apiErrorMessage?: string;
 };
+
+function parseProviderErrorBody(body: unknown): { apiErrorCode?: string; apiErrorMessage?: string } {
+  if (!body || typeof body !== "object") return {};
+  const error = (body as { error?: { status?: string; code?: string | number; message?: string; type?: string } }).error;
+  if (!error) return {};
+  const apiErrorCode =
+    (typeof error.status === "string" && error.status) ||
+    (typeof error.type === "string" && error.type) ||
+    (error.code != null ? String(error.code) : undefined);
+  const apiErrorMessage = typeof error.message === "string" ? error.message.slice(0, 200) : undefined;
+  return { apiErrorCode, apiErrorMessage };
+}
 
 const RECOMMENDATION_JSON_SCHEMA = {
   type: "object",
@@ -289,7 +305,12 @@ async function completeAttempt(
   const extracted = extractJsonObject(text);
   if (!extracted.ok) {
     const failure: LiveAiFailure = { reason: extracted.reason, provider };
-    logLiveAiDiagnostic({ provider, reason: extracted.reason, accepted: false });
+    logLiveAiDiagnostic({
+      provider,
+      model: provider === "gemini" ? geminiModel() : openaiModel(),
+      reason: extracted.reason,
+      accepted: false,
+    });
     return { rec: null, failure };
   }
   const parsed = parseLlmRecommendationResult(extracted.json, seed, dx, ranked, provider);
@@ -326,6 +347,7 @@ async function tryOpenAI(
   const run = async (responseFormat: unknown) =>
     fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
+      cache: "no-store",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
@@ -342,6 +364,7 @@ async function tryOpenAI(
       signal: AbortSignal.timeout(LIVE_AI_TIMEOUT_MS),
     });
 
+  const started = Date.now();
   try {
     const jsonSchemaFormat = {
       type: "json_schema",
@@ -355,27 +378,67 @@ async function tryOpenAI(
     if (res.status === 400) {
       res = await run({ type: "json_object" });
     }
+    const durationMs = Date.now() - started;
     if (!res.ok) {
-      let apiErrorCode: string | undefined;
+      let parsed: { apiErrorCode?: string; apiErrorMessage?: string } = {};
       try {
-        const errBody = (await res.json()) as { error?: { code?: string; type?: string } };
-        apiErrorCode = errBody.error?.code ?? errBody.error?.type;
+        parsed = parseProviderErrorBody(await res.json());
       } catch {
         /* ignore */
       }
-      logLiveAiDiagnostic({ provider: "openai", reason: "http_error", httpStatus: res.status, apiErrorCode, accepted: false });
-      return { rec: null, failure: { reason: "http_error", provider: "openai", httpStatus: res.status } };
+      logLiveAiDiagnostic({
+        provider: "openai",
+        model: openaiModel(),
+        reason: "http_error",
+        httpStatus: res.status,
+        apiErrorCode: parsed.apiErrorCode,
+        apiErrorMessage: parsed.apiErrorMessage,
+        durationMs,
+        openaiAttempted: true,
+        openaiHttpStatus: res.status,
+        openaiKeyPresent: true,
+        geminiKeyPresent: Boolean(process.env.GEMINI_API_KEY),
+        accepted: false,
+      });
+      return {
+        rec: null,
+        failure: { reason: "http_error", provider: "openai", httpStatus: res.status },
+        httpStatus: res.status,
+        durationMs,
+        apiErrorCode: parsed.apiErrorCode,
+        apiErrorMessage: parsed.apiErrorMessage,
+      };
     }
     const data = (await res.json()) as { choices?: { message?: { content?: string | null } }[] };
     const content = data.choices?.[0]?.message?.content ?? "";
-    return completeAttempt("openai", content, seed, dx, ranked);
+    const attempt = await completeAttempt("openai", content, seed, dx, ranked);
+    return { ...attempt, durationMs };
   } catch (err) {
+    const durationMs = Date.now() - started;
     if (isTimeoutError(err)) {
-      logLiveAiDiagnostic({ provider: "openai", reason: "timeout", accepted: false });
-      return { rec: null, failure: { reason: "timeout", provider: "openai" } };
+      logLiveAiDiagnostic({
+        provider: "openai",
+        model: openaiModel(),
+        reason: "timeout",
+        durationMs,
+        openaiAttempted: true,
+        openaiKeyPresent: true,
+        geminiKeyPresent: Boolean(process.env.GEMINI_API_KEY),
+        accepted: false,
+      });
+      return { rec: null, failure: { reason: "timeout", provider: "openai" }, durationMs };
     }
-    logLiveAiDiagnostic({ provider: "openai", reason: "http_error", accepted: false });
-    return { rec: null, failure: { reason: "http_error", provider: "openai" } };
+    logLiveAiDiagnostic({
+      provider: "openai",
+      model: openaiModel(),
+      reason: "http_error",
+      durationMs,
+      openaiAttempted: true,
+      openaiKeyPresent: true,
+      geminiKeyPresent: Boolean(process.env.GEMINI_API_KEY),
+      accepted: false,
+    });
+    return { rec: null, failure: { reason: "http_error", provider: "openai" }, durationMs };
   }
 }
 
@@ -398,9 +461,11 @@ async function tryGemini(
   ranked: Array<{ play: PlayId; score: number }>,
 ): Promise<ProviderAttempt | null> {
   if (!process.env.GEMINI_API_KEY) return null;
+  const started = Date.now();
   try {
     const res = await fetch(geminiGenerateUrl(), {
       method: "POST",
+      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         "x-goog-api-key": process.env.GEMINI_API_KEY,
@@ -415,30 +480,85 @@ async function tryGemini(
       }),
       signal: AbortSignal.timeout(LIVE_AI_TIMEOUT_MS),
     });
+    const durationMs = Date.now() - started;
     if (!res.ok) {
-      let apiErrorCode: string | undefined;
+      let parsed: { apiErrorCode?: string; apiErrorMessage?: string } = {};
       try {
-        const errBody = (await res.json()) as { error?: { status?: string; code?: number } };
-        apiErrorCode = errBody.error?.status ?? (errBody.error?.code != null ? String(errBody.error.code) : undefined);
+        parsed = parseProviderErrorBody(await res.json());
       } catch {
         /* ignore */
       }
-      logLiveAiDiagnostic({ provider: "gemini", reason: "http_error", httpStatus: res.status, apiErrorCode, accepted: false });
-      return { rec: null, failure: { reason: "http_error", provider: "gemini", httpStatus: res.status } };
+      logLiveAiDiagnostic({
+        provider: "gemini",
+        model: geminiModel(),
+        reason: "http_error",
+        httpStatus: res.status,
+        apiErrorCode: parsed.apiErrorCode,
+        apiErrorMessage: parsed.apiErrorMessage,
+        durationMs,
+        geminiAttempted: true,
+        geminiHttpStatus: res.status,
+        geminiKeyPresent: true,
+        openaiKeyPresent: Boolean(process.env.OPENAI_API_KEY),
+        accepted: false,
+      });
+      return {
+        rec: null,
+        failure: { reason: "http_error", provider: "gemini", httpStatus: res.status },
+        httpStatus: res.status,
+        durationMs,
+        apiErrorCode: parsed.apiErrorCode,
+        apiErrorMessage: parsed.apiErrorMessage,
+      };
     }
     const data = (await res.json()) as {
       candidates?: { content?: { parts?: { text?: string }[] } }[];
     };
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    return completeAttempt("gemini", content, seed, dx, ranked);
+    const attempt = await completeAttempt("gemini", content, seed, dx, ranked);
+    return { ...attempt, durationMs, httpStatus: res.status };
   } catch (err) {
+    const durationMs = Date.now() - started;
     if (isTimeoutError(err)) {
-      logLiveAiDiagnostic({ provider: "gemini", reason: "timeout", accepted: false });
-      return { rec: null, failure: { reason: "timeout", provider: "gemini" } };
+      logLiveAiDiagnostic({
+        provider: "gemini",
+        model: geminiModel(),
+        reason: "timeout",
+        durationMs,
+        geminiAttempted: true,
+        geminiKeyPresent: true,
+        openaiKeyPresent: Boolean(process.env.OPENAI_API_KEY),
+        accepted: false,
+      });
+      return { rec: null, failure: { reason: "timeout", provider: "gemini" }, durationMs };
     }
-    logLiveAiDiagnostic({ provider: "gemini", reason: "http_error", accepted: false });
-    return { rec: null, failure: { reason: "http_error", provider: "gemini" } };
+    logLiveAiDiagnostic({
+      provider: "gemini",
+      model: geminiModel(),
+      reason: "http_error",
+      durationMs,
+      geminiAttempted: true,
+      geminiKeyPresent: true,
+      openaiKeyPresent: Boolean(process.env.OPENAI_API_KEY),
+      accepted: false,
+    });
+    return { rec: null, failure: { reason: "http_error", provider: "gemini" }, durationMs };
   }
+}
+
+function liveAiFallbackReason(openai: ProviderAttempt | null, gemini: ProviderAttempt | null): string {
+  const geminiStatus = gemini?.httpStatus ?? gemini?.failure.httpStatus;
+  const openaiStatus = openai?.httpStatus ?? openai?.failure.httpStatus;
+  if (gemini?.failure.reason === "http_error" && geminiStatus === 503) {
+    return openai ? `openai_${openai.failure.reason}_${openaiStatus ?? "none"}_then_gemini_http_503` : "gemini_http_503";
+  }
+  if (gemini) {
+    return `gemini_${gemini.failure.reason}${geminiStatus != null ? `_${geminiStatus}` : ""}`;
+  }
+  if (openai) {
+    return `openai_${openai.failure.reason}${openaiStatus != null ? `_${openaiStatus}` : ""}`;
+  }
+  return "no_provider";
 }
 
 async function llmRecommend(
@@ -457,9 +577,23 @@ async function llmRecommend(
     gemini?.failure ??
     openai?.failure ??
     ({ reason: "no_provider" } satisfies LiveAiFailure);
-  if (!openai && !gemini) {
-    logLiveAiDiagnostic({ provider: "openai", reason: "no_provider", accepted: false });
-  }
+  logLiveAiDiagnostic({
+    provider: gemini ? "gemini" : "openai",
+    model: gemini ? geminiModel() : openai ? openaiModel() : undefined,
+    reason: failure.reason,
+    httpStatus: gemini?.httpStatus ?? gemini?.failure.httpStatus ?? openai?.httpStatus ?? openai?.failure.httpStatus,
+    apiErrorCode: gemini?.apiErrorCode ?? openai?.apiErrorCode,
+    apiErrorMessage: gemini?.apiErrorMessage ?? openai?.apiErrorMessage,
+    durationMs: (openai?.durationMs ?? 0) + (gemini?.durationMs ?? 0),
+    openaiAttempted: Boolean(openai),
+    openaiHttpStatus: openai?.httpStatus ?? openai?.failure.httpStatus,
+    geminiAttempted: Boolean(gemini),
+    geminiHttpStatus: gemini?.httpStatus ?? gemini?.failure.httpStatus,
+    geminiKeyPresent: Boolean(process.env.GEMINI_API_KEY),
+    openaiKeyPresent: Boolean(process.env.OPENAI_API_KEY),
+    fallbackReason: liveAiFallbackReason(openai, gemini),
+    accepted: false,
+  });
   return { rec: null, failure };
 }
 
