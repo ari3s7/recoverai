@@ -334,7 +334,9 @@ export function CaseDrawer({
               ) : cse.executionStatus === "executed" && cse.play && cse.play.id !== "stop" && cse.play.id !== "human_escalate" ? (
                 <p className="font-medium text-ok">
                   {cse.play.id === "payment_link" || cse.execution?.paymentLinkUrl
-                    ? "Payment Link created"
+                    ? cse.execution?.paymentLinkReused
+                      ? "Payment Link reused"
+                      : "Payment Link created"
                     : `${PLAY_LABEL[cse.play.id]} executed`}
                 </p>
               ) : cse.executionStatus ? (
@@ -345,8 +347,11 @@ export function CaseDrawer({
               {cse.execution?.message ? (
                 <p className="text-xs text-muted mt-1">{cse.execution.message}</p>
               ) : null}
-              {linkUrl && !execFailed ? (
-                <p className="mt-2">
+              {linkUrl && /^https:\/\//i.test(linkUrl) ? (
+                <div className="mt-2 rounded-md border border-gold/30 bg-gold/5 px-2.5 py-2 space-y-1">
+                  <p className="text-[10px] uppercase tracking-wide text-muted">
+                    {recovered > 0 ? "Razorpay payment link" : "Existing Razorpay payment link"}
+                  </p>
                   <a
                     href={linkUrl}
                     target="_blank"
@@ -356,10 +361,13 @@ export function CaseDrawer({
                   >
                     Open Razorpay payment link
                   </a>
-                  <span className="block text-[10px] text-muted mt-1">
-                    {recovered > 0 ? "Verified capture received." : "Recovery pending"}
-                  </span>
-                </p>
+                  <p className="text-[10px] text-muted break-all">{linkUrl}</p>
+                  <p className="text-[10px] text-muted">
+                    {recovered > 0
+                      ? "Verified capture received."
+                      : "Unpaid · open this link for the test payment. Recovery waits for the Razorpay webhook."}
+                  </p>
+                </div>
               ) : shouldShowUnverifiedWebhookHint(cse) ? (
                 <p className="text-[10px] text-muted mt-1">
                   Payment may have succeeded, but RecoverAI has not received a verified webhook yet.

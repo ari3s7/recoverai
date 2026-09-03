@@ -147,7 +147,9 @@ export function buildRecoveryJourney(cse: RunCase): JourneyStep[] {
       timestamp: actionEv?.ts ?? cse.updatedAt,
       actor: actorOf(actionEv, "AGENT"),
       decision: linkIssued
-        ? "Razorpay Payment Link created"
+        ? cse.execution?.paymentLinkReused
+          ? "Razorpay Payment Link reused"
+          : "Razorpay Payment Link created"
         : `${PLAY_LABEL[cse.play.id]} executed`,
       status: "done",
       reason: cse.execution?.message,

@@ -232,6 +232,7 @@ test("first payment-link creation stores the returned Razorpay URL and does not 
   assert.equal(result.provider, "razorpay");
   assert.equal(result.referenceId, "plink_1");
   assert.equal(result.paymentLinkUrl, "https://rzp.io/i/link1");
+  assert.equal(result.paymentLinkReused, undefined);
   assert.equal(posts.length, 1);
   assert.notEqual(posts[0]!.reference_id, seed.id);
   assert.equal(posts[0]!.notes.recoverai_case_id, seed.id);
@@ -257,9 +258,50 @@ test("second execution reuses a valid unpaid payment link instead of creating an
   assert.equal(second.ok, true);
   assert.equal(first.settled, false);
   assert.equal(second.settled, false);
+  assert.equal(first.paymentLinkReused, true);
+  assert.equal(second.paymentLinkReused, true);
   assert.equal(first.paymentLinkUrl, "https://rzp.io/i/old");
   assert.equal(second.paymentLinkUrl, first.paymentLinkUrl);
   assert.equal(existingUnpaidPaymentLink(seed)?.id, "plink_old");
+});
+
+test("concurrent executePlay reuses one unpaid link and does not POST twice", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate();
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const seed = nv1050();
+  seed.signals.razorpayPaymentLinkId = "plink_old";
+  seed.paymentLinkUrl = "https://rzp.io/i/old";
+  const [a, b] = await Promise.all([
+    executePlay(seed, LINK_PLAY, "expired_card"),
+    executePlay(seed, LINK_PLAY, "expired_card"),
+  ]);
+  assert.equal(posts.length, 0);
+  assert.equal(a.paymentLinkUrl, "https://rzp.io/i/old");
+  assert.equal(b.paymentLinkUrl, "https://rzp.io/i/old");
+  assert.equal(a.paymentLinkReused, true);
+  assert.equal(b.paymentLinkReused, true);
+  assert.equal(a.settled, false);
+  assert.equal(b.settled, false);
+});
+
+test("captured or paid cases are not treated as unpaid links", () => {
+  const paid = nv1050();
+  paid.signals.razorpayPaymentLinkId = "plink_old";
+  paid.paymentLinkUrl = "https://rzp.io/i/old";
+  paid.signals.razorpayPaymentId = "pay_captured";
+  paid.status = "recovered";
+  paid.outcome = { status: "recovered", recoveredInr: paid.amountInr, promisedInr: 0, note: "captured" };
+  assert.equal(existingUnpaidPaymentLink(paid), undefined);
+
+  const invalid = nv1050();
+  invalid.signals.razorpayPaymentLinkId = "plink_old";
+  invalid.paymentLinkUrl = "rzp.io/i/old";
+  assert.equal(existingUnpaidPaymentLink(invalid), undefined);
 });
 
 test("reference_id collision retries with a unique id and returns the new link", async (t) => {
@@ -440,7 +482,7 @@ test("HTTP 429 after a single attempt stays failed and does not recover", async 
   assert.equal(processed.execution?.paymentLinkUrl, undefined);
   assert.equal(processed.status, "at_risk");
   assert.equal(processed.outcome?.recoveredInr, 0);
-  assert.match(processed.execution?.message ?? "", /rate-limited/);
+  assert.match(processed.execution?.message ?? "", /rate limit reached/i);
   assert.ok(processed.timeline.some((e) => e.action === "ACTION_ATTEMPTED"));
   assert.ok(!processed.timeline.some((e) => e.action === "ACTION_RETRY"));
   assert.equal(processed.timeline.filter((e) => e.action === "ACTION_EXECUTED").length, 1);
@@ -555,11 +597,15 @@ test("existing unpaid link is reused and recoveredInr stays 0", async (t) => {
   assert.equal(posts.length, 0);
   assert.equal(processed.execution?.ok, true);
   assert.equal(processed.execution?.settled, false);
+  assert.equal(processed.execution?.paymentLinkReused, true);
   assert.equal(processed.outcome?.recoveredInr, 0);
   assert.equal(processed.paymentLinkUrl, "https://rzp.io/i/existing");
   assert.equal(processed.signals.razorpayPaymentLinkId, "plink_existing");
   assert.equal(processed.status, "at_risk");
   assert.equal(shouldShowUnverifiedWebhookHint(processed), false);
+  assert.match(processed.execution?.message ?? "", /reused/i);
+  assert.ok(processed.timeline.some((e) => e.action === "ACTION_ATTEMPTED" && e.reason.includes("reused")));
+  assert.ok(!processed.timeline.some((e) => e.action === "PAYMENT_OUTCOME"));
 });
 
 test("failed create without an existing link does not increase recoveredInr", async (t) => {
@@ -575,12 +621,12 @@ test("failed create without an existing link does not increase recoveredInr", as
   assert.equal(processed.execution?.ok, false);
   assert.equal(processed.outcome?.recoveredInr, 0);
   assert.equal(processed.paymentLinkUrl, undefined);
-  assert.equal(paymentLinkFailureCopy("rate_limited"), "Razorpay temporarily rate-limited this request. No recovery recorded.");
+  assert.equal(paymentLinkFailureCopy("rate_limited"), "Razorpay rate limit reached. Reuse an existing payment link or try again later.");
   assert.equal(paymentLinkFailureCopy("timeout"), "Razorpay request timed out. No recovery recorded.");
   assert.equal(paymentLinkFailureCopy("permanent_error"), "Razorpay rejected the payment-link request. No recovery recorded.");
   assert.equal(
     friendlyActionError("Razorpay payment link failed (Too many requests.)"),
-    "Razorpay temporarily rate-limited this request. No recovery recorded.",
+    "Razorpay rate limit reached. Reuse an existing payment link or try again later.",
   );
 });
 
@@ -643,4 +689,65 @@ test("webhook recovery still works after successful link creation", async (t) =>
   assert.equal(once.cases[0]?.outcome?.recoveredInr, processed.amountInr);
   assert.equal(twice.cases[0]?.outcome?.recoveredInr, processed.amountInr);
   assert.equal(twice.cases[0]?.timeline.filter((e) => e.action === "PAYMENT_OUTCOME").length, 1);
+});
+
+test("invalid short_url is not reused and 429 still does not recover", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate({ fail: "Too many requests.", status: 429 });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const before = nv1050();
+  before.signals.razorpayPaymentLinkId = "plink_existing";
+  before.paymentLinkUrl = "not-a-url";
+  const processed = await processCase(before, DEFAULT_POLICY, policyNow(DEFAULT_POLICY));
+  assert.equal(posts.length, 1);
+  assert.equal(processed.execution?.ok, false);
+  assert.equal(processed.execution?.failureReason, "rate_limited");
+  assert.equal(processed.execution?.retryCount, 0);
+  assert.equal(processed.outcome?.recoveredInr, 0);
+  assert.equal(processed.status, "at_risk");
+});
+
+test("STOP HOLD ESCALATE still block execution even with an unpaid payment link", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate();
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const attachLink = (cse: ReturnType<typeof asRunCase>) => {
+    cse.paymentLinkUrl = "https://rzp.io/i/existing";
+    cse.signals.razorpayPaymentLinkId = "plink_existing";
+    return cse;
+  };
+
+  const stopped = await processCase(
+    attachLink(asRunCase(byName(SEED_CASES, "Farhan Ali"))),
+    DEFAULT_POLICY,
+    policyNow(DEFAULT_POLICY),
+  );
+  assert.equal(stopped.executionStatus, "blocked");
+  assert.equal(stopped.policy?.action, "stop");
+  assert.equal(stopped.execution?.provider, "policy");
+
+  const held = await processCase(
+    attachLink(asRunCase(byName(SEED_CASES, "Diya Nair"))),
+    DEFAULT_POLICY,
+    policyNow(DEFAULT_POLICY),
+  );
+  assert.equal(held.executionStatus, "held");
+  assert.equal(held.policy?.action, "hold");
+
+  const escalated = await processCase(
+    attachLink(asRunCase(byName(SEED_CASES, "Neel Logistics"))),
+    DEFAULT_POLICY,
+    policyNow(DEFAULT_POLICY),
+  );
+  assert.equal(escalated.executionStatus, "escalated");
+  assert.equal(escalated.policy?.action, "escalate");
+  assert.equal(posts.length, 0);
 });

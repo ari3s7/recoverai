@@ -292,6 +292,8 @@ export type ExecutionResult = {
   referenceId: string;
   message: string;
   paymentLinkUrl?: string;
+  /** True when an existing unpaid Razorpay link was reused (no new POST). */
+  paymentLinkReused?: boolean;
   /** Machine-readable Razorpay create failure. Absent on success. */
   failureReason?: RazorpayFailureReason;
   /** Transient Razorpay retries performed before the final result. */

@@ -33,6 +33,7 @@ export function CommandCenter() {
   const [view, setView] = useState<WorkspaceView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [liveLine, setLiveLine] = useState("Idle · waiting for a batch");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [leak, setLeak] = useState<"all" | LeakType>("all");
@@ -113,18 +114,23 @@ export function CommandCenter() {
   }
 
   async function onAction(id: string, action: CaseActionRequest) {
-    const res = await fetch(`/api/cases/${id}/actions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(action),
-    });
-    const data = (await res.json()) as WorkspaceView & { error?: string; case?: RunCase };
-    if (!res.ok) {
-      const message = data.error ?? "Action failed";
-      setError(message);
-      throw new Error(message);
+    setActionBusy(true);
+    try {
+      const res = await fetch(`/api/cases/${id}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
+      });
+      const data = (await res.json()) as WorkspaceView & { error?: string; case?: RunCase };
+      if (!res.ok) {
+        const message = data.error ?? "Action failed";
+        setError(message);
+        throw new Error(message);
+      }
+      setView(data);
+    } finally {
+      setActionBusy(false);
     }
-    setView(data);
   }
 
   async function resetDesk() {
@@ -518,7 +524,7 @@ export function CommandCenter() {
       <CaseDrawer
         cse={selected}
         llmConfigured={view.llmConfigured}
-        busy={running}
+        busy={running || actionBusy}
         policy={view.policy}
         onClose={() => setSelectedId(null)}
         onAction={onAction}

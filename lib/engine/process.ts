@@ -197,9 +197,16 @@ export async function processCase(
     } else {
       if (execution.provider === "razorpay") {
         timeline.push(
-          stamp(current.id, "agent", "ACTION_ATTEMPTED", "Razorpay payment-link create attempted."),
+          stamp(
+            current.id,
+            "agent",
+            "ACTION_ATTEMPTED",
+            execution.paymentLinkReused
+              ? "Razorpay payment-link reused. No new create."
+              : "Razorpay payment-link create attempted.",
+          ),
         );
-        if ((execution.retryCount ?? 0) > 0) {
+        if (!execution.paymentLinkReused && (execution.retryCount ?? 0) > 0) {
           const detail = execution.failureReason
             ? `Transient Razorpay failure (${execution.failureReason}) retried ${execution.retryCount} time(s).`
             : `Transient Razorpay failure retried ${execution.retryCount} time(s).`;
@@ -320,7 +327,7 @@ export async function processCase(
     updatedAt: ts,
   };
 
-  if (auth.execute) {
+  if (auth.execute && !execution.paymentLinkReused) {
     next = bumpContacts(next, play, ts);
   }
 

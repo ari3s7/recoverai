@@ -94,7 +94,7 @@ function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): Execution
 
 export function paymentLinkFailureMessage(reason: RazorpayFailureReason): string {
   if (reason === "rate_limited") {
-    return "Razorpay temporarily rate-limited this request. No recovery recorded.";
+    return "Razorpay rate limit reached. Reuse an existing payment link or try again later.";
   }
   if (reason === "timeout") {
     return "Razorpay request timed out. No recovery recorded.";
@@ -108,19 +108,26 @@ export function paymentLinkFailureMessage(reason: RazorpayFailureReason): string
 export function executionFromIssuedLink(
   link: { id: string; short_url: string },
   playId: Play["id"],
-  extra?: { retryCount?: number },
+  extra?: { retryCount?: number; reused?: boolean },
 ): ExecutionResult {
+  const reused = Boolean(extra?.reused);
+  const linkLine = reused
+    ? `Existing payment link reused: ${link.short_url}`
+    : `Razorpay payment link issued: ${link.short_url}`;
   return {
     ok: true,
     settled: false,
     provider: "razorpay",
     referenceId: link.id,
     paymentLinkUrl: link.short_url,
+    paymentLinkReused: reused || undefined,
     retryCount: extra?.retryCount,
     message:
       playId === "smart_retry"
-        ? `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
-        : `Razorpay payment link issued: ${link.short_url}`,
+        ? reused
+          ? `Razorpay will not re-debit a failed instrument. ${linkLine}`
+          : `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
+        : linkLine,
   };
 }
 
@@ -148,11 +155,22 @@ export function executionFromFailedLink(
   };
 }
 
+/** Reuse only a real unpaid Razorpay short_url. Captured/paid cases must not mint or recycle a link. */
 export function existingUnpaidPaymentLink(seed: SeedCase): { id: string; short_url: string } | undefined {
+  const run = seed as SeedCase & {
+    paymentLinkUrl?: string;
+    status?: string;
+    outcome?: { recoveredInr?: number };
+    execution?: { settled?: boolean };
+  };
+  if (run.status === "recovered") return undefined;
+  if ((run.outcome?.recoveredInr ?? 0) > 0) return undefined;
+  if (run.execution?.settled) return undefined;
+  if (seed.signals.razorpayPaymentId) return undefined;
   const id = seed.signals.razorpayPaymentLinkId;
-  const short_url = "paymentLinkUrl" in seed ? (seed as { paymentLinkUrl?: string }).paymentLinkUrl : undefined;
+  const short_url = run.paymentLinkUrl;
   if (!id?.startsWith("plink_") || !short_url) return undefined;
-  if (!/^https?:\/\//i.test(short_url)) return undefined;
+  if (!/^https:\/\//i.test(short_url)) return undefined;
   return { id, short_url };
 }
 
@@ -164,7 +182,7 @@ export async function executePlay(seed: SeedCase, play: Play, cause: RootCause):
 
   const existing = existingUnpaidPaymentLink(seed);
   if (existing) {
-    return executionFromIssuedLink(existing, play.id, { retryCount: 0 });
+    return executionFromIssuedLink(existing, play.id, { retryCount: 0, reused: true });
   }
 
   try {

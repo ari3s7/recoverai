@@ -43,7 +43,7 @@ export function actionHelp(type: CaseActionRequest["type"]): string {
 
 export function paymentLinkFailureCopy(reason?: RazorpayFailureReason): string {
   if (reason === "rate_limited") {
-    return "Razorpay temporarily rate-limited this request. No recovery recorded.";
+    return "Razorpay rate limit reached. Reuse an existing payment link or try again later.";
   }
   if (reason === "timeout") {
     return "Razorpay request timed out. No recovery recorded.";

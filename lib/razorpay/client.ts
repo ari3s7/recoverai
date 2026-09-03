@@ -106,7 +106,7 @@ export function classifyRazorpayFailure(input: {
 }
 
 export function isTransientRazorpayFailure(reason: RazorpayFailureReason): boolean {
-  return reason === "rate_limited" || reason === "transient_error" || reason === "timeout";
+  return reason === "transient_error" || reason === "timeout";
 }
 
 /** 429 means stop — retrying it keeps the account in the penalty box. Collision/5xx/timeout may retry. */
