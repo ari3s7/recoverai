@@ -63,13 +63,18 @@ function authHeader(): string {
 export class RazorpayRequestError extends Error {
   readonly status?: number;
   readonly reason: RazorpayFailureReason;
+  readonly errorCode?: string;
   retryCount = 0;
 
-  constructor(message: string, opts: { status?: number; reason: RazorpayFailureReason }) {
+  constructor(
+    message: string,
+    opts: { status?: number; reason: RazorpayFailureReason; errorCode?: string },
+  ) {
     super(message);
     this.name = "RazorpayRequestError";
     this.status = opts.status;
     this.reason = opts.reason;
+    this.errorCode = opts.errorCode;
   }
 }
 
@@ -104,6 +109,31 @@ export function isTransientRazorpayFailure(reason: RazorpayFailureReason): boole
   return reason === "rate_limited" || reason === "transient_error" || reason === "timeout";
 }
 
+/** 429 means stop — retrying it keeps the account in the penalty box. Collision/5xx/timeout may retry. */
+export function shouldRetryPaymentLinkFailure(error: RazorpayRequestError): boolean {
+  if (isPaymentLinkReferenceCollision(error.message)) return true;
+  if (error.reason === "rate_limited") return false;
+  return error.reason === "transient_error" || error.reason === "timeout";
+}
+
+type RazorpayErrorBody = {
+  error?: { description?: string; code?: string; reason?: string };
+};
+
+function logPaymentLinkAttempt(entry: {
+  ts: string;
+  endpoint: string;
+  method: string;
+  caseId: string;
+  attempt: number;
+  referenceId: string;
+  status?: number;
+  errorCode?: string | null;
+  errorDescription?: string | null;
+}): void {
+  console.info("[recoverai:razorpay]", JSON.stringify(entry));
+}
+
 function causeMessage(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return "";
@@ -134,6 +164,7 @@ async function razorpayFetch<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const res = await fetch(`${BASE}${path}`, {
       ...init,
+      cache: "no-store",
       headers: {
         Authorization: authHeader(),
         "Content-Type": "application/json",
@@ -141,11 +172,12 @@ async function razorpayFetch<T>(path: string, init?: RequestInit): Promise<T> {
       },
       signal: AbortSignal.timeout(8000),
     });
-    const body = (await res.json().catch(() => ({}))) as T & { error?: { description?: string } };
+    const body = (await res.json().catch(() => ({}))) as T & RazorpayErrorBody;
     if (!res.ok) {
       const description = body.error?.description ?? `Razorpay ${res.status}`;
       throw new RazorpayRequestError(description, {
         status: res.status,
+        errorCode: body.error?.code,
         reason: classifyRazorpayFailure({ status: res.status, message: description }),
       });
     }
@@ -254,15 +286,35 @@ export async function createPaymentLinkDetailed(input: PaymentLinkCreateInput): 
         : paymentLinkReferenceId(input.caseId);
     try {
       const link = await post(referenceId);
+      logPaymentLinkAttempt({
+        ts: new Date().toISOString(),
+        endpoint: "https://api.razorpay.com/v1/payment_links",
+        method: "POST",
+        caseId: input.caseId,
+        attempt: attempt + 1,
+        referenceId,
+        status: 200,
+        errorCode: null,
+        errorDescription: null,
+      });
       return { link, retryCount: attempt };
     } catch (err) {
       const error = asRazorpayError(err);
       error.retryCount = attempt;
       lastError = error;
-      const collision = isPaymentLinkReferenceCollision(error.message);
-      const retryable = collision || isTransientRazorpayFailure(error.reason);
-      if (!retryable || attempt >= PAYMENT_LINK_MAX_RETRIES) throw error;
-      if (!collision) await retrySleep(paymentLinkRetryDelayMs(attempt));
+      logPaymentLinkAttempt({
+        ts: new Date().toISOString(),
+        endpoint: "https://api.razorpay.com/v1/payment_links",
+        method: "POST",
+        caseId: input.caseId,
+        attempt: attempt + 1,
+        referenceId,
+        status: error.status,
+        errorCode: error.errorCode ?? null,
+        errorDescription: error.message,
+      });
+      if (!shouldRetryPaymentLinkFailure(error) || attempt >= PAYMENT_LINK_MAX_RETRIES) throw error;
+      if (!isPaymentLinkReferenceCollision(error.message)) await retrySleep(paymentLinkRetryDelayMs(attempt));
     }
   }
   throw lastError ?? new RazorpayRequestError("Razorpay error", { reason: "transient_error" });

@@ -8,6 +8,7 @@ import type { BatchStreamEvent, RunCase } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const fetchCache = "force-no-store";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

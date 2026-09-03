@@ -148,11 +148,24 @@ export function executionFromFailedLink(
   };
 }
 
+export function existingUnpaidPaymentLink(seed: SeedCase): { id: string; short_url: string } | undefined {
+  const id = seed.signals.razorpayPaymentLinkId;
+  const short_url = "paymentLinkUrl" in seed ? (seed as { paymentLinkUrl?: string }).paymentLinkUrl : undefined;
+  if (!id?.startsWith("plink_") || !short_url) return undefined;
+  if (!/^https?:\/\//i.test(short_url)) return undefined;
+  return { id, short_url };
+}
+
 export async function executePlay(seed: SeedCase, play: Play, cause: RootCause): Promise<ExecutionResult> {
   const sandbox = executeSandbox(seed, play, cause);
   const wantsLink =
     play.id === "payment_link" || play.id === "smart_retry" || play.id === "hinglish_voice";
   if (!razorpayConfigured() || !wantsLink) return sandbox;
+
+  const existing = existingUnpaidPaymentLink(seed);
+  if (existing) {
+    return executionFromIssuedLink(existing, play.id, { retryCount: 0 });
+  }
 
   try {
     const created = await createPaymentLinkDetailed({

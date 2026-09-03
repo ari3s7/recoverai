@@ -5,6 +5,7 @@ import { withCaseCreateLock } from "@/lib/engine/caseActionLock";
 import type { CaseActionRequest } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 function isAction(body: unknown): body is CaseActionRequest {
   if (!body || typeof body !== "object") return false;
