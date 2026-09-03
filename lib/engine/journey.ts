@@ -133,7 +133,13 @@ export function buildRecoveryJourney(cse: RunCase): JourneyStep[] {
       decision: "No action yet",
       status: "pending",
     };
-  } else if (cse.executionStatus === "executed" && cse.play && cse.play.id !== "stop" && cse.play.id !== "human_escalate") {
+  } else if (
+    cse.executionStatus === "executed" &&
+    cse.execution?.ok !== false &&
+    cse.play &&
+    cse.play.id !== "stop" &&
+    cse.play.id !== "human_escalate"
+  ) {
     const linkIssued = Boolean(cse.paymentLinkUrl || cse.execution?.paymentLinkUrl);
     action = {
       id: "action",
@@ -179,7 +185,7 @@ export function buildRecoveryJourney(cse: RunCase): JourneyStep[] {
       status: "done",
       reason: cse.outcome?.promisedDate ? `Due ${cse.outcome.promisedDate}` : cse.outcome?.note,
     };
-  } else if (cse.executionStatus === "executed" && cse.play?.id === "payment_link") {
+  } else if (cse.executionStatus === "executed" && cse.execution?.ok !== false && cse.play?.id === "payment_link") {
     outcome = {
       id: "outcome",
       title: "Customer Outcome",

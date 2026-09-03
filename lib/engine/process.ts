@@ -195,6 +195,17 @@ export async function processCase(
         ),
       );
     } else {
+      if (execution.provider === "razorpay") {
+        timeline.push(
+          stamp(current.id, "agent", "ACTION_ATTEMPTED", "Razorpay payment-link create attempted."),
+        );
+        if ((execution.retryCount ?? 0) > 0) {
+          const detail = execution.failureReason
+            ? `Transient Razorpay failure (${execution.failureReason}) retried ${execution.retryCount} time(s).`
+            : `Transient Razorpay failure retried ${execution.retryCount} time(s).`;
+          timeline.push(stamp(current.id, "agent", "ACTION_RETRY", detail));
+        }
+      }
       timeline.push(
         stamp(
           current.id,

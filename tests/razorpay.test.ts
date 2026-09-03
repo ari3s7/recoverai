@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { mock, test } from "node:test";
+import { after, before, mock, test } from "node:test";
 import { emptyWorkspace } from "../lib/db/store";
+import { startExclusiveAction, withCaseCreateLock } from "../lib/engine/caseActionLock";
 import {
   executePlay,
   executionFromFailedLink,
@@ -11,16 +12,31 @@ import { DEFAULT_POLICY, policyNow } from "../lib/policy/defaults";
 import { applyRazorpayWebhook } from "../lib/razorpay/apply";
 import {
   createPaymentLink,
+  createPaymentLinkDetailed,
   isPaymentLinkReferenceCollision,
   paymentLinkCreateBody,
   paymentLinkNotes,
   paymentLinkReferenceId,
+  paymentLinkRetryDelayMs,
+  setPaymentLinkRetrySleep,
   type RazorpayPayment,
 } from "../lib/razorpay/client";
 import { caseIdFromNotes } from "../lib/razorpay/map";
+import {
+  friendlyActionError,
+  paymentLinkFailureCopy,
+  shouldShowUnverifiedWebhookHint,
+} from "../components/ui-copy";
 import { asRunCase, byName } from "./helpers";
 import { SEED_CASES } from "../lib/seed/cases";
 import type { Play } from "../lib/types";
+
+before(() => {
+  setPaymentLinkRetrySleep(async () => undefined);
+});
+after(() => {
+  setPaymentLinkRetrySleep(null);
+});
 
 test("Payment Link creation does not mark recovered", () => {
   const result = executionFromIssuedLink(
@@ -118,9 +134,16 @@ function parseLinkPost(init?: RequestInit): LinkPost {
   return JSON.parse(String(init?.body ?? "{}")) as LinkPost;
 }
 
+type MockStep =
+  | { ok: true }
+  | { status: number; description?: string }
+  | { throw: Error };
+
 function mockPaymentLinkCreate(opts?: {
   collideOn?: (referenceId: string, attempt: number) => boolean;
   fail?: string;
+  status?: number;
+  steps?: MockStep[];
 }) {
   const posts: LinkPost[] = [];
   const fetchMock = mock.method(
@@ -129,8 +152,17 @@ function mockPaymentLinkCreate(opts?: {
     async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = parseLinkPost(init);
       posts.push(body);
+      const step = opts?.steps?.[posts.length - 1];
+      if (step && "throw" in step) throw step.throw;
+      if (step && "status" in step) {
+        return new Response(JSON.stringify({ error: { description: step.description ?? `Razorpay ${step.status}` } }), {
+          status: step.status,
+        });
+      }
       if (opts?.fail) {
-        return new Response(JSON.stringify({ error: { description: opts.fail } }), { status: 502 });
+        return new Response(JSON.stringify({ error: { description: opts.fail } }), {
+          status: opts.status ?? 502,
+        });
       }
       if (opts?.collideOn?.(body.reference_id, posts.length)) {
         return new Response(
@@ -359,4 +391,238 @@ test("duplicate capture remains idempotent after unique reference_id links", asy
   assert.equal(cse.status, "recovered");
   assert.equal(cse.outcome?.recoveredInr, second.amountInr);
   assert.equal(cse.timeline.filter((e) => e.action === "PAYMENT_OUTCOME").length, 1);
+});
+
+test("HTTP 429 retries then succeeds with a new unique reference_id", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate({
+    steps: [{ status: 429, description: "Too many requests." }, { ok: true }],
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const created = await createPaymentLinkDetailed({
+    caseId: "NV-1050",
+    amountInr: 1899,
+    name: "Rohan Iyer",
+    description: "Nivaara recovery NV-1050",
+  });
+  assert.equal(posts.length, 2);
+  assert.notEqual(posts[0]!.reference_id, posts[1]!.reference_id);
+  assert.notEqual(posts[0]!.reference_id, "NV-1050");
+  assert.notEqual(posts[1]!.reference_id, "NV-1050");
+  assert.equal(posts[0]!.notes.recoverai_case_id, "NV-1050");
+  assert.equal(posts[1]!.notes.recoverai_case_id, "NV-1050");
+  assert.equal(created.retryCount, 1);
+  assert.equal(created.link.short_url, "https://rzp.io/i/link2");
+});
+
+test("HTTP 429 after all retries stays failed and does not recover", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate({ fail: "Too many requests.", status: 429 });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const before = nv1050();
+  const processed = await processCase(before, DEFAULT_POLICY, policyNow(DEFAULT_POLICY));
+  assert.equal(posts.length, 3);
+  const refs = new Set(posts.map((p) => p.reference_id));
+  assert.equal(refs.size, 3);
+  assert.equal(processed.execution?.ok, false);
+  assert.equal(processed.execution?.settled, false);
+  assert.equal(processed.execution?.failureReason, "rate_limited");
+  assert.equal(processed.execution?.retryCount, 2);
+  assert.equal(processed.execution?.paymentLinkUrl, undefined);
+  assert.equal(processed.status, "at_risk");
+  assert.equal(processed.outcome?.recoveredInr, 0);
+  assert.match(processed.execution?.message ?? "", /rate-limited/);
+  assert.ok(processed.timeline.some((e) => e.action === "ACTION_ATTEMPTED"));
+  assert.ok(processed.timeline.some((e) => e.action === "ACTION_RETRY"));
+  assert.equal(processed.timeline.filter((e) => e.action === "ACTION_EXECUTED").length, 1);
+  assert.equal(processed.timeline.filter((e) => e.action === "PAYMENT_OUTCOME").length, 0);
+});
+
+test("transient 5xx is retried then succeeds", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate({
+    steps: [{ status: 503, description: "Service unavailable" }, { ok: true }],
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const result = await executePlay(nv1050(), LINK_PLAY, "expired_card");
+  assert.equal(posts.length, 2);
+  assert.notEqual(posts[0]!.reference_id, posts[1]!.reference_id);
+  assert.equal(result.ok, true);
+  assert.equal(result.settled, false);
+  assert.equal(result.retryCount, 1);
+  assert.equal(result.paymentLinkUrl, "https://rzp.io/i/link2");
+  assert.equal(result.failureReason, undefined);
+});
+
+test("permanent 4xx does not retry", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { posts, fetchMock } = mockPaymentLinkCreate({
+    fail: "The amount is invalid.",
+    status: 400,
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const result = await executePlay(nv1050(), LINK_PLAY, "expired_card");
+  assert.equal(posts.length, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.settled, false);
+  assert.equal(result.failureReason, "permanent_error");
+  assert.equal(result.retryCount, 0);
+  assert.equal(result.paymentLinkUrl, undefined);
+  assert.match(result.message, /rejected the payment-link request/);
+});
+
+test("timeout is retried with a unique reference_id then succeeds", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const timeout = new Error("The operation was aborted due to timeout");
+  timeout.name = "TimeoutError";
+  const { posts, fetchMock } = mockPaymentLinkCreate({
+    steps: [{ throw: timeout }, { ok: true }],
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const created = await createPaymentLink({
+    caseId: "NV-1050",
+    amountInr: 1899,
+    name: "Rohan Iyer",
+    description: "Nivaara recovery NV-1050",
+  });
+  assert.equal(posts.length, 2);
+  assert.notEqual(posts[0]!.reference_id, posts[1]!.reference_id);
+  assert.equal(created.short_url, "https://rzp.io/i/link2");
+});
+
+test("retry backoff stays bounded with jitter", () => {
+  const first = paymentLinkRetryDelayMs(0, () => 0);
+  const firstHi = paymentLinkRetryDelayMs(0, () => 1);
+  const second = paymentLinkRetryDelayMs(1, () => 0);
+  const secondHi = paymentLinkRetryDelayMs(1, () => 1);
+  assert.ok(first >= 500 && firstHi <= 650);
+  assert.ok(second >= 1000 && secondHi <= 2000);
+});
+
+test("successful link after retry stores short_url and stays at risk", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { fetchMock } = mockPaymentLinkCreate({
+    steps: [{ status: 429, description: "Too many requests." }, { ok: true }],
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const processed = await processCase(nv1050(), DEFAULT_POLICY, policyNow(DEFAULT_POLICY));
+  assert.equal(processed.execution?.ok, true);
+  assert.equal(processed.execution?.settled, false);
+  assert.equal(processed.paymentLinkUrl, "https://rzp.io/i/link2");
+  assert.equal(processed.signals.razorpayPaymentLinkId, "plink_2");
+  assert.equal(processed.status, "at_risk");
+  assert.equal(processed.outcome?.recoveredInr, 0);
+  assert.equal(shouldShowUnverifiedWebhookHint(processed), false);
+});
+
+test("failed link does not increase recoveredInr or invent a URL", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { fetchMock } = mockPaymentLinkCreate({ fail: "Too many requests.", status: 429 });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const before = nv1050();
+  before.paymentLinkUrl = "https://rzp.io/i/existing";
+  before.signals.razorpayPaymentLinkId = "plink_existing";
+  const processed = await processCase(before, DEFAULT_POLICY, policyNow(DEFAULT_POLICY));
+  assert.equal(processed.outcome?.recoveredInr, 0);
+  assert.equal(processed.paymentLinkUrl, "https://rzp.io/i/existing");
+  assert.equal(processed.signals.razorpayPaymentLinkId, "plink_existing");
+  assert.equal(processed.execution?.paymentLinkUrl, undefined);
+  assert.equal(shouldShowUnverifiedWebhookHint(processed), false);
+  assert.equal(paymentLinkFailureCopy("rate_limited"), "Razorpay temporarily rate-limited this request. No recovery recorded.");
+  assert.equal(paymentLinkFailureCopy("timeout"), "Razorpay request timed out. No recovery recorded.");
+  assert.equal(paymentLinkFailureCopy("permanent_error"), "Razorpay rejected the payment-link request. No recovery recorded.");
+  assert.equal(
+    friendlyActionError("Razorpay payment link failed (Too many requests.)"),
+    "Razorpay temporarily rate-limited this request. No recovery recorded.",
+  );
+});
+
+test("rapid duplicate execution is prevented", async () => {
+  let calls = 0;
+  const started: number[] = [];
+  const task = async () => {
+    calls += 1;
+    started.push(calls);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return calls;
+  };
+  const [a, b] = await Promise.all([
+    withCaseCreateLock("NV-1050", "run", task),
+    withCaseCreateLock("NV-1050", "run", task),
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(a, 1);
+  assert.equal(b, 1);
+  assert.deepEqual(started, [1]);
+
+  const flag = { current: false };
+  assert.equal(startExclusiveAction(flag), true);
+  assert.equal(startExclusiveAction(flag), false);
+  flag.current = false;
+  assert.equal(startExclusiveAction(flag), true);
+});
+
+test("webhook recovery still works after successful link creation", async (t) => {
+  const restoreEnv = installRazorpayEnv();
+  const { fetchMock } = mockPaymentLinkCreate({
+    steps: [{ status: 429, description: "Too many requests." }, { ok: true }],
+  });
+  t.after(() => {
+    fetchMock.mock.restore();
+    restoreEnv();
+  });
+
+  const processed = await processCase(nv1050(), DEFAULT_POLICY, policyNow(DEFAULT_POLICY));
+  assert.equal(processed.paymentLinkUrl, "https://rzp.io/i/link2");
+  const ws = { ...emptyWorkspace(), cases: [processed], audit: [] };
+  const payment: RazorpayPayment = {
+    id: "pay_after_retry",
+    amount: processed.amountInr * 100,
+    currency: "INR",
+    status: "captured",
+    created_at: Math.floor(Date.now() / 1000),
+    notes: { recoverai_case_id: processed.id },
+  };
+  const once = applyRazorpayWebhook(ws, {
+    event: "payment.captured",
+    payment,
+    link: { id: "plink_2", short_url: processed.paymentLinkUrl, notes: paymentLinkNotes(processed.id) },
+  });
+  const twice = applyRazorpayWebhook(once, {
+    event: "payment.captured",
+    payment,
+    link: { id: "plink_2", notes: paymentLinkNotes(processed.id) },
+  });
+  assert.equal(once.cases[0]?.status, "recovered");
+  assert.equal(once.cases[0]?.outcome?.recoveredInr, processed.amountInr);
+  assert.equal(twice.cases[0]?.outcome?.recoveredInr, processed.amountInr);
+  assert.equal(twice.cases[0]?.timeline.filter((e) => e.action === "PAYMENT_OUTCOME").length, 1);
 });

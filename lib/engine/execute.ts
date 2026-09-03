@@ -1,7 +1,11 @@
 import { inr } from "../format";
 import { uid } from "../ids";
-import { createPaymentLink, razorpayConfigured } from "../razorpay/client";
-import type { ExecutionResult, Play, RootCause, SeedCase } from "../types";
+import {
+  createPaymentLinkDetailed,
+  razorpayConfigured,
+  RazorpayRequestError,
+} from "../razorpay/client";
+import type { ExecutionResult, Play, RazorpayFailureReason, RootCause, SeedCase } from "../types";
 import { settleAgainstGroundTruth } from "./groundTruth";
 export { sandboxUnit } from "./hash";
 
@@ -88,9 +92,23 @@ function executeSandbox(seed: SeedCase, play: Play, cause: RootCause): Execution
   };
 }
 
+export function paymentLinkFailureMessage(reason: RazorpayFailureReason): string {
+  if (reason === "rate_limited") {
+    return "Razorpay temporarily rate-limited this request. No recovery recorded.";
+  }
+  if (reason === "timeout") {
+    return "Razorpay request timed out. No recovery recorded.";
+  }
+  if (reason === "transient_error") {
+    return "Razorpay request failed temporarily. No recovery recorded.";
+  }
+  return "Razorpay rejected the payment-link request. No recovery recorded.";
+}
+
 export function executionFromIssuedLink(
   link: { id: string; short_url: string },
   playId: Play["id"],
+  extra?: { retryCount?: number },
 ): ExecutionResult {
   return {
     ok: true,
@@ -98,6 +116,7 @@ export function executionFromIssuedLink(
     provider: "razorpay",
     referenceId: link.id,
     paymentLinkUrl: link.short_url,
+    retryCount: extra?.retryCount,
     message:
       playId === "smart_retry"
         ? `Razorpay will not re-debit a failed instrument. New payment link issued: ${link.short_url}`
@@ -105,13 +124,27 @@ export function executionFromIssuedLink(
   };
 }
 
-export function executionFromFailedLink(why: string): ExecutionResult {
+export function executionFromFailedLink(
+  why: string | RazorpayFailureReason,
+  extra?: { failureReason?: RazorpayFailureReason; retryCount?: number },
+): ExecutionResult {
+  const failureReason =
+    extra?.failureReason ??
+    (why === "rate_limited" || why === "transient_error" || why === "timeout" || why === "permanent_error"
+      ? why
+      : why.toLowerCase().includes("too many") || why.toLowerCase().includes("rate limit")
+        ? "rate_limited"
+        : why.toLowerCase().includes("timeout") || why.toLowerCase().includes("timed out")
+          ? "timeout"
+          : "permanent_error");
   return {
     ok: false,
     settled: false,
     provider: "razorpay",
     referenceId: uid("exec"),
-    message: `Razorpay payment link failed (${why}). Case stays at risk — not recovered.`,
+    failureReason,
+    retryCount: extra?.retryCount,
+    message: paymentLinkFailureMessage(failureReason),
   };
 }
 
@@ -122,7 +155,7 @@ export async function executePlay(seed: SeedCase, play: Play, cause: RootCause):
   if (!razorpayConfigured() || !wantsLink) return sandbox;
 
   try {
-    const link = await createPaymentLink({
+    const created = await createPaymentLinkDetailed({
       caseId: seed.id,
       amountInr: seed.amountInr,
       name: seed.customer.name,
@@ -130,9 +163,13 @@ export async function executePlay(seed: SeedCase, play: Play, cause: RootCause):
       contact: seed.customer.contact,
       description: `Nivaara recovery ${seed.id} · ${play.label}`,
     });
-    return executionFromIssuedLink(link, play.id);
+    return executionFromIssuedLink(created.link, play.id, { retryCount: created.retryCount });
   } catch (err) {
+    const error = err instanceof RazorpayRequestError ? err : undefined;
     const why = err instanceof Error ? err.message : "Razorpay error";
-    return executionFromFailedLink(why);
+    return executionFromFailedLink(why, {
+      failureReason: error?.reason,
+      retryCount: error?.retryCount,
+    });
   }
 }

@@ -282,6 +282,8 @@ export type EvaluationReport = {
   brierScore: number;
 };
 
+export type RazorpayFailureReason = "rate_limited" | "transient_error" | "timeout" | "permanent_error";
+
 export type ExecutionResult = {
   ok: boolean;
   /** True only when money actually moved (sandbox conversion or Razorpay capture). */
@@ -290,6 +292,10 @@ export type ExecutionResult = {
   referenceId: string;
   message: string;
   paymentLinkUrl?: string;
+  /** Machine-readable Razorpay create failure. Absent on success. */
+  failureReason?: RazorpayFailureReason;
+  /** Transient Razorpay retries performed before the final result. */
+  retryCount?: number;
 };
 
 export type AuditActor = "agent" | "ai" | "policy" | "human" | "ingest";

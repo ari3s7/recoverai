@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCustomerHistory } from "@/lib/agent/context";
 import { CHANNEL_LABEL, isChannelRecommendationOnly } from "@/lib/engine/channel";
 import { buildRecoveryJourney, type JourneyStatus, type JourneyStep } from "@/lib/engine/journey";
@@ -12,7 +12,17 @@ import { describePromiseLifecycle } from "@/lib/engine/promise";
 import { CAUSE_LABEL, inr, ist, LEAK_LABEL, PLAY_LABEL } from "@/lib/format";
 import { DEFAULT_POLICY, policyNow } from "@/lib/policy/defaults";
 import type { CaseActionRequest, PolicyConfig, RunCase } from "@/lib/types";
-import { auditActionShort, auditLane, actionBusyLabel, actionHelp, AI_VS_HEURISTIC_NOTE, friendlyActionError } from "./ui-copy";
+import { startExclusiveAction } from "@/lib/engine/caseActionLock";
+import {
+  auditActionShort,
+  auditLane,
+  actionBusyLabel,
+  actionHelp,
+  AI_VS_HEURISTIC_NOTE,
+  executionFailureCopy,
+  friendlyActionError,
+  shouldShowUnverifiedWebhookHint,
+} from "./ui-copy";
 import { StatusPill } from "./status-pill";
 
 function speakHinglish(text: string) {
@@ -53,6 +63,7 @@ export function CaseDrawer({
   const [actingType, setActingType] = useState<CaseActionRequest["type"] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [syncedKey, setSyncedKey] = useState("");
+  const actingRef = useRef(false);
 
   const syncKey = cse ? `${cse.id}:${cse.updatedAt}` : "";
   if (cse && syncKey !== syncedKey) {
@@ -120,6 +131,7 @@ export function CaseDrawer({
       : null;
 
   async function runAction(action: CaseActionRequest) {
+    if (!startExclusiveAction(actingRef)) return;
     setActing(true);
     setActingType(action.type);
     setActionError(null);
@@ -129,6 +141,7 @@ export function CaseDrawer({
       const raw = err instanceof Error ? err.message : "Action failed";
       setActionError(friendlyActionError(raw));
     } finally {
+      actingRef.current = false;
       setActing(false);
       setActingType(null);
     }
@@ -317,11 +330,7 @@ export function CaseDrawer({
             <div>
               <Label>Execution</Label>
               {execFailed ? (
-                <p className="font-medium text-danger">
-                  {cse.play?.id === "payment_link" || /razorpay|payment link/i.test(cse.execution?.message ?? "")
-                    ? "Payment link creation failed. No recovery recorded."
-                    : "Action failed. No recovery recorded."}
-                </p>
+                <p className="font-medium text-danger">{executionFailureCopy(cse.execution)}</p>
               ) : cse.executionStatus === "executed" && cse.play && cse.play.id !== "stop" && cse.play.id !== "human_escalate" ? (
                 <p className="font-medium text-ok">
                   {cse.play.id === "payment_link" || cse.execution?.paymentLinkUrl
@@ -348,10 +357,10 @@ export function CaseDrawer({
                     Open Razorpay payment link
                   </a>
                   <span className="block text-[10px] text-muted mt-1">
-                    Payment link issued ≠ revenue recovered until a verified capture webhook.
+                    {recovered > 0 ? "Verified capture received." : "Recovery pending"}
                   </span>
                 </p>
-              ) : cse.play?.id === "payment_link" && cse.executionStatus === "executed" && !linkUrl ? (
+              ) : shouldShowUnverifiedWebhookHint(cse) ? (
                 <p className="text-[10px] text-muted mt-1">
                   Payment may have succeeded, but RecoverAI has not received a verified webhook yet.
                 </p>
@@ -697,8 +706,12 @@ function OpButton({
   return (
     <button
       disabled={disabled}
+      aria-busy={disabled || undefined}
       title={title}
-      onClick={onClick}
+      onClick={() => {
+        if (disabled) return;
+        onClick();
+      }}
       className="rounded-md border border-line px-2.5 py-1.5 text-xs hover:border-gold/50 hover:text-gold disabled:opacity-40"
     >
       {children}

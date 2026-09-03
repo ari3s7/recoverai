@@ -1,4 +1,4 @@
-import type { AuditEvent, CaseActionRequest } from "@/lib/types";
+import type { AuditEvent, CaseActionRequest, ExecutionResult, RazorpayFailureReason, RunCase } from "@/lib/types";
 import { auditActionLabel, auditActorLabel } from "./audit-copy";
 
 export { policyCaption } from "@/lib/engine/policyExplain";
@@ -41,8 +41,46 @@ export function actionHelp(type: CaseActionRequest["type"]): string {
   }
 }
 
+export function paymentLinkFailureCopy(reason?: RazorpayFailureReason): string {
+  if (reason === "rate_limited") {
+    return "Razorpay temporarily rate-limited this request. No recovery recorded.";
+  }
+  if (reason === "timeout") {
+    return "Razorpay request timed out. No recovery recorded.";
+  }
+  if (reason === "transient_error") {
+    return "Razorpay request failed temporarily. No recovery recorded.";
+  }
+  return "Razorpay rejected the payment-link request. No recovery recorded.";
+}
+
+export function executionFailureCopy(execution?: ExecutionResult): string {
+  if (execution?.provider === "razorpay") return paymentLinkFailureCopy(execution.failureReason);
+  return "Action failed. No recovery recorded.";
+}
+
+/** Webhook-pending copy is only for a real issued link/payment, never a create failure. */
+export function shouldShowUnverifiedWebhookHint(cse: Pick<RunCase, "execution" | "executionStatus" | "play" | "outcome" | "paymentLinkUrl" | "signals">): boolean {
+  if (cse.execution?.ok === false) return false;
+  if ((cse.outcome?.recoveredInr ?? 0) > 0) return false;
+  if (cse.paymentLinkUrl || cse.execution?.paymentLinkUrl) return false;
+  const attempted =
+    Boolean(cse.signals.razorpayPaymentId) ||
+    (cse.execution?.ok === true && cse.execution.provider === "razorpay");
+  return attempted && cse.executionStatus === "executed";
+}
+
 export function friendlyActionError(message: string): string {
   const m = message.toLowerCase();
+  if (m.includes("razorpay") && (m.includes("rate-limited") || m.includes("too many") || m.includes("rate limit"))) {
+    return paymentLinkFailureCopy("rate_limited");
+  }
+  if (m.includes("razorpay") && (m.includes("timed out") || m.includes("timeout"))) {
+    return paymentLinkFailureCopy("timeout");
+  }
+  if (m.includes("razorpay") && (m.includes("rejected") || m.includes("invalid") || m.includes("fail") || m.includes("link"))) {
+    return paymentLinkFailureCopy(m.includes("temporarily") ? "transient_error" : "permanent_error");
+  }
   if (m.includes("timeout") || m.includes("timed out")) {
     return "AI request timed out. No action was executed.";
   }
@@ -51,9 +89,6 @@ export function friendlyActionError(message: string): string {
   }
   if (m.includes("invalid") && (m.includes("json") || m.includes("response") || m.includes("validator"))) {
     return "AI response rejected by validator. No unsafe action was executed.";
-  }
-  if (m.includes("razorpay") && (m.includes("fail") || m.includes("link"))) {
-    return "Payment link creation failed. No recovery recorded.";
   }
   if (m.includes("webhook")) {
     return "Payment may have succeeded, but RecoverAI has not received a verified webhook yet.";
@@ -79,6 +114,8 @@ export function auditLane(ev: AuditEvent): string {
 export function auditActionShort(ev: AuditEvent): string {
   if (ev.action === "AI_DECISION") return "Recommended play";
   if (ev.action === "POLICY_DECISION") return "Policy decision";
+  if (ev.action === "ACTION_ATTEMPTED") return "Action attempted";
+  if (ev.action === "ACTION_RETRY") return "Action retried";
   if (ev.action === "ACTION_EXECUTED") return "Action executed";
   if (ev.action === "ACTION_BLOCKED") return "Action blocked";
   if (ev.action === "ACTION_HELD") return "Action held";
