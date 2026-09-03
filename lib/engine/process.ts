@@ -301,7 +301,10 @@ export async function processCase(
     outcome,
     execution,
     executionStatus: auth.executionStatus,
-    paymentLinkUrl: auth.execute ? (execution.paymentLinkUrl ?? current.paymentLinkUrl) : current.paymentLinkUrl,
+    paymentLinkUrl:
+      auth.execute && execution.ok && execution.paymentLinkUrl
+        ? execution.paymentLinkUrl
+        : current.paymentLinkUrl,
     timeline: [...current.timeline, ...timeline],
     updatedAt: ts,
   };
@@ -316,7 +319,7 @@ export async function processCase(
   if (status === "recovered") {
     next.signals = { ...next.signals, promiseToPayDate: undefined };
   }
-  if (auth.execute && execution.provider === "razorpay") {
+  if (auth.execute && execution.provider === "razorpay" && execution.ok && execution.paymentLinkUrl) {
     next.signals = { ...next.signals, razorpayPaymentLinkId: execution.referenceId };
   }
 
